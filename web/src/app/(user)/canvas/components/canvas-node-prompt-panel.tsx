@@ -5,7 +5,7 @@ import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { Button } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelOptionDescription, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -41,6 +41,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
     const credits = requestCreditCost({ channelMode: config.channelMode, model: config.model, count: mode === "image" ? config.count : 1 });
+    const modelDescription = mode === "video" ? modelOptionDescription(config, config.model) : "";
 
     useEffect(() => {
         setPrompt(isEditingExistingContent ? "" : node.metadata?.prompt || "");
@@ -132,6 +133,11 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     </span>
                 </Button>
             </div>
+            {modelDescription ? (
+                <div className="mt-1.5 line-clamp-2 max-w-[30rem] text-xs leading-4" style={{ color: theme.node.muted }}>
+                    {modelDescription}
+                </div>
+            ) : null}
         </div>
     );
 }

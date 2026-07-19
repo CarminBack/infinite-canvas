@@ -20,6 +20,7 @@ type ImageGroupPrice = {
 
 type PricingItem = {
     model_name?: string;
+    description?: string;
     quota_type?: number;
     model_price?: number;
     enable_groups?: string[];
@@ -38,7 +39,10 @@ export async function GET() {
             fetchImageGroupPricing(session.accessTokens.image),
         ]);
         const pricingMap = videoPricingMap(pricing);
-        const video = prioritize(videoModels, DEFAULTS.video).map((id) => ({ id, priceLabel: videoPriceLabel(pricingMap.get(id)) }));
+        const video = prioritize(videoModels, DEFAULTS.video).map((id) => {
+            const item = pricingMap.get(id);
+            return { id, priceLabel: videoPriceLabel(item), description: item?.description?.trim() || undefined };
+        });
         const text = prioritize(textModels.filter(isTextModel), DEFAULTS.text).map((id) => ({ id }));
         const audio = textModels.includes(DEFAULTS.audio) ? [{ id: DEFAULTS.audio, priceLabel: "按量计费" }] : [];
 

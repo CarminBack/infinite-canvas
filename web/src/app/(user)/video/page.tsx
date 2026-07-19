@@ -18,7 +18,7 @@ import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionDescription, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -527,12 +527,14 @@ export default function VideoPage() {
 
 function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const modelDescription = modelOptionDescription(config, model);
 
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">模型</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+                {modelDescription ? <span className="mt-1.5 block text-xs leading-5 text-stone-500 dark:text-stone-400">{modelDescription}</span> : null}
             </label>
             <div className="col-span-2">
                 <VideoSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />

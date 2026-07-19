@@ -5,7 +5,7 @@ import { Image as ImageIcon, LoaderCircle, MessageSquare, Music2, Play, Settings
 import { Button, Segmented } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
-import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelOptionDescription, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -30,6 +30,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const mode = node.metadata?.generationMode || "image";
     const config = buildNodeConfig(globalConfig, node, mode);
+    const modelDescription = mode === "video" ? modelOptionDescription(config, config.model) : "";
     const count = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const credits = requestCreditCost({ channelMode: config.channelMode, model: config.model, count: mode === "image" ? count : 1 });
     const chipStyle = { background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text };
@@ -110,6 +111,11 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                     <CanvasAudioSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))} />
                 ) : null}
             </div>
+            {modelDescription ? (
+                <div className="-mt-1 mb-2 line-clamp-2 text-[11px] leading-4" style={{ color: theme.node.muted }}>
+                    {modelDescription}
+                </div>
+            ) : null}
 
             <Button
                 type="primary"

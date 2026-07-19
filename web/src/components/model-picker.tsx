@@ -5,7 +5,7 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { modelOptionDescription, modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -72,8 +72,8 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             >
                 {options.length ? (
                     options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
-                            <ModelLabel config={config} model={model} />
+                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)} className={capability === "video" && modelOptionDescription(config, model) ? "items-start py-2" : undefined}>
+                            <ModelLabel config={config} model={model} showDescription={capability === "video"} />
                         </SelectItem>
                     ))
                 ) : (
@@ -92,11 +92,17 @@ function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
     return config.models.length ? `暂无匹配的${label}模型` : "请先到配置里添加渠道和模型";
 }
 
-function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+function ModelLabel({ config, model, showDescription }: { config: AiConfig; model: string; showDescription: boolean }) {
+    const description = showDescription ? modelOptionDescription(config, model) : "";
     return (
         <span className="flex min-w-0 items-start gap-2">
-            <ModelIcon model={model} />
-            <span className="break-all leading-5">{modelOptionLabel(config, model)}</span>
+            <span className="mt-0.5">
+                <ModelIcon model={model} />
+            </span>
+            <span className="flex min-w-0 flex-col items-start gap-0.5">
+                <span className="break-all leading-5">{modelOptionLabel(config, model)}</span>
+                {description ? <span className="line-clamp-2 text-left text-xs leading-4 text-muted-foreground">{description}</span> : null}
+            </span>
         </span>
     );
 }

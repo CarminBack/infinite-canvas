@@ -7,7 +7,7 @@ import { nanoid } from "nanoid";
 
 export type ApiCallFormat = "openai" | "gemini";
 
-export type ModelCatalogItem = { id: string; priceLabel?: string };
+export type ModelCatalogItem = { id: string; priceLabel?: string; description?: string };
 
 export type ModelCatalog = Record<ModelCapability, ModelCatalogItem[]> & {
     defaults: Record<ModelCapability, string>;
@@ -48,6 +48,7 @@ export type AiConfig = {
     textModels: string[];
     audioModels: string[];
     modelPriceLabels: Record<string, string>;
+    modelDescriptions: Record<string, string>;
     modelCatalogVersion: number;
     quality: string;
     size: string;
@@ -108,6 +109,7 @@ export const defaultConfig: AiConfig = {
         "gpt-image-2": "1K $0.10 · 2K $0.14 · 4K $0.20",
         "gemini-3.1-flash-image": "1K $0.10 · 2K $0.14 · 4K $0.20",
     },
+    modelDescriptions: {},
     modelCatalogVersion: 0,
     quality: "auto",
     size: "1:1",
@@ -258,6 +260,7 @@ export const useConfigStore = create<ConfigStore>()(
                         videoWatermark: config.videoWatermark || "false",
                         canvasImageCount: config.canvasImageCount || "3",
                         modelPriceLabels: config.modelPriceLabels && typeof config.modelPriceLabels === "object" ? config.modelPriceLabels : {},
+                        modelDescriptions: config.modelDescriptions && typeof config.modelDescriptions === "object" ? config.modelDescriptions : {},
                         modelCatalogVersion: Number.isFinite(config.modelCatalogVersion) ? config.modelCatalogVersion : 0,
                         imageModels: Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels, channels) : filterModelsByCapability(models, "image"),
                         videoModels: Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels, channels) : filterModelsByCapability(models, "video"),
@@ -316,6 +319,10 @@ export function modelOptionLabel(config: AiConfig, value: string) {
     const displayName = model === "gemini-3.1-flash-image" ? "Nano Banana" : model;
     const priceLabel = config.modelPriceLabels[model];
     return priceLabel ? displayName + " · " + priceLabel : displayName;
+}
+
+export function modelOptionDescription(config: AiConfig, value: string) {
+    return config.modelDescriptions[modelOptionName(value)] || "";
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {
@@ -382,6 +389,7 @@ export function applyModelCatalog(config: AiConfig, catalog: ModelCatalog): AiCo
     const textModel = select(config.textModel, textModels, catalog.defaults.text);
     const audioModel = select(config.audioModel, audioModels, catalog.defaults.audio);
     const modelPriceLabels = Object.fromEntries(items.filter((item) => item.priceLabel).map((item) => [item.id, item.priceLabel || ""]));
+    const modelDescriptions = Object.fromEntries(items.filter((item) => item.description).map((item) => [item.id, item.description || ""]));
     const models = modelOptionsFromChannels([channel]);
     return {
         ...config,
@@ -397,6 +405,7 @@ export function applyModelCatalog(config: AiConfig, catalog: ModelCatalog): AiCo
         audioModel,
         model: models.includes(normalizeModelOptionValue(config.model, [channel])) ? normalizeModelOptionValue(config.model, [channel]) : imageModel,
         modelPriceLabels,
+        modelDescriptions,
         modelCatalogVersion: 1,
     };
 }
