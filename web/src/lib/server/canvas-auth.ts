@@ -8,6 +8,7 @@ import { cookies } from "next/headers";
 
 const DEFAULT_PUBLIC_ORIGIN = "https://canvas.mewinyou.shop";
 const DEFAULT_TOKEN_ORIGIN = "https://token.mewinyou.shop";
+const DEFAULT_IMAGE_API_ORIGIN = "https://image-api.mewinyou.shop";
 const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const OAUTH_COOKIE_TTL_SECONDS = 10 * 60;
 
@@ -46,6 +47,10 @@ export function getCanvasPublicOrigin() {
 
 export function getCanvasTokenOrigin() {
     return normalizeOrigin(process.env.TOKEN_API_BASE_URL || process.env.TOKEN_ISSUER_URL || DEFAULT_TOKEN_ORIGIN);
+}
+
+export function getCanvasImageApiOrigin() {
+    return normalizeOrigin(process.env.IMAGE_API_BASE_URL || DEFAULT_IMAGE_API_ORIGIN);
 }
 
 export function getCanvasOAuthClientId() {

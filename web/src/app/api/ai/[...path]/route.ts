@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getCanvasPublicOrigin, getCanvasSession, getCanvasTokenOrigin, type CanvasCapability } from "@/lib/server/canvas-auth";
+import { getCanvasImageApiOrigin, getCanvasPublicOrigin, getCanvasSession, getCanvasTokenOrigin, type CanvasCapability } from "@/lib/server/canvas-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,7 +38,8 @@ async function proxyRequest(request: Request, context: { params: Promise<{ path:
     }
 
     const incomingUrl = new URL(request.url);
-    const upstreamUrl = new URL(path, getCanvasTokenOrigin());
+    const upstreamOrigin = capability === "image" ? getCanvasImageApiOrigin() : getCanvasTokenOrigin();
+    const upstreamUrl = new URL(path, upstreamOrigin);
     upstreamUrl.search = incomingUrl.search;
     const headers = new Headers(request.headers);
     for (const name of [
