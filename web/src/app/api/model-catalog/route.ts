@@ -33,8 +33,8 @@ export async function GET() {
     try {
         const [imageModels, videoModels, textModels, pricing, imageGroupPrice] = await Promise.all([
             fetchModels(session.accessTokens.image),
-            fetchModels(session.accessTokens.video),
-            fetchModels(session.accessTokens.text).catch(() => []),
+            session.accessTokens.video ? fetchModels(session.accessTokens.video) : [],
+            session.accessTokens.text ? fetchModels(session.accessTokens.text).catch(() => []) : [],
             fetchPricing().catch(() => []),
             fetchImageGroupPricing(session.accessTokens.image),
         ]);

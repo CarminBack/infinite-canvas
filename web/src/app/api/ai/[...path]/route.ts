@@ -36,6 +36,10 @@ async function proxyRequest(request: Request, context: { params: Promise<{ path:
     if (!capability || !route.capabilities.includes(capability)) {
         return NextResponse.json({ error: { message: "模型能力类型不匹配" } }, { status: 400 });
     }
+    const accessToken = session.accessTokens[capability];
+    if (!accessToken) {
+        return NextResponse.json({ error: { message: "当前 Token 账号未开通此模型能力" } }, { status: 403 });
+    }
 
     const incomingUrl = new URL(request.url);
     const upstreamOrigin = capability === "image" ? getCanvasImageApiOrigin() : getCanvasTokenOrigin();
@@ -63,7 +67,7 @@ async function proxyRequest(request: Request, context: { params: Promise<{ path:
     ]) {
         headers.delete(name);
     }
-    headers.set("Authorization", "Bearer " + session.accessTokens[capability]);
+    headers.set("Authorization", "Bearer " + accessToken);
     headers.set("Accept-Encoding", "identity");
 
     const init: RequestInit & { duplex?: "half" } = {

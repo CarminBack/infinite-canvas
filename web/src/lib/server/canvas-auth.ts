@@ -14,7 +14,12 @@ const OAUTH_COOKIE_TTL_SECONDS = 10 * 60;
 
 export type CanvasCapability = "image" | "video" | "text" | "audio";
 
-export type CanvasAccessTokens = Record<CanvasCapability, string>;
+export type CanvasAccessTokens = {
+    image: string;
+    video?: string;
+    text?: string;
+    audio?: string;
+};
 
 export type CanvasSession = {
     issuer: string;
@@ -166,8 +171,9 @@ export function createCanvasSession(input: { issuer: string; subject: string; us
 
 function parseAccessTokens(value: string): CanvasAccessTokens {
     const parsed = JSON.parse(value) as Partial<CanvasAccessTokens>;
-    for (const capability of ["image", "video", "text", "audio"] as const) {
-        if (!parsed[capability]?.startsWith("sk-")) throw new Error("missing " + capability + " token");
+    if (!parsed.image?.startsWith("sk-")) throw new Error("missing image token");
+    for (const capability of ["video", "text", "audio"] as const) {
+        if (parsed[capability] !== undefined && !parsed[capability]?.startsWith("sk-")) throw new Error("invalid " + capability + " token");
     }
     return parsed as CanvasAccessTokens;
 }
