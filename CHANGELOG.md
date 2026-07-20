@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- [新增] Canvas 支持使用 Token/New API 账号一键登录，强制创建或复用 `Image` 分组令牌，并按账号权限创建 `Video`、`ChatGPT` 分组令牌。
+- [新增] Canvas 支持使用 Token/New API 账号一键登录，并自动创建或复用 `Image`、`Video`、`ChatGPT` 分组令牌。
 - [新增] Canvas 右上角显示 Token 账号余额，点击余额可跳转 Token 钱包充值页面。
 - [安全] 真实 Token API Key 仅加密保存在服务端会话数据库中，浏览器统一通过固定的同源 AI 代理访问模型服务。
 - [调整] 配置页移除 Base URL、API Key、渠道和调用格式输入；登录后按生图、视频、文本、音频能力自动更新模型，生图模型及 1K/2K/4K 价格自动同步 Token `Image` 分组与系统设置，视频展示按秒/按条价格，并在模型选择项及已选模型下方同步模型广场描述。
@@ -10,7 +10,6 @@
 - [修复] 修复视频创作台长耗时任务过早显示失败，并兼容 New API 返回的 `done` 状态与视频直链结果。
 - [修复] 修复 Token/New API 中 Seedance 模型错误调用未注册的原生任务路径，导致视频创作台立即返回 `Invalid URL`。
 - [修复] 修复账号无权访问 `ChatGPT` 分组时整个模型目录同步失败，导致视频创作台继续显示旧的价格兜底文案。
-- [修复] 修复账号无权访问 `ChatGPT` 或 `Video` 分组时 Token 一键登录整体失败的问题。
 - [修复] 修复高分辨率 Image2 生图超过 Cloudflare 代理等待时间后，Token 已完成但 Canvas 显示失败的问题。
 
 - [新增] 渠道兼容Gemini格式。
