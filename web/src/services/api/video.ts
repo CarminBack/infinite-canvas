@@ -3,7 +3,19 @@ import axios from "axios";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
-import { boolConfig, buildSeedancePromptText, isArkPlanBaseUrl, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
+import {
+    boolConfig,
+    buildSeedancePromptText,
+    isArkPlanBaseUrl,
+    isSeedanceVideoConfig,
+    normalizeSeedanceDuration,
+    normalizeSeedanceRatio,
+    normalizeSeedanceResolution,
+    resolveSeedanceModeType,
+    seedanceCapabilitiesForModel,
+    seedanceVideoReferenceError,
+    validateSeedanceRequest,
+} from "@/lib/seedance-video";
 import { buildApiUrl, modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -124,26 +136,44 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
     if (audioReferences.length && !references.length && !videoReferences.length) {
         throw new Error("Seedance 参考音频不能单独使用，请同时添加参考图或参考视频");
     }
+    const requestModel = modelOptionName(model);
+    const capability = seedanceCapabilitiesForModel(requestModel);
+    const requestError = validateSeedanceRequest(requestModel, config.videoModeType, references, videoReferences, audioReferences);
+    if (requestError) throw new Error(requestError);
     assertSeedanceVideoReferences(videoReferences);
     assertSeedanceAudioReferences(audioReferences);
-    const content = await buildSeedanceContent(config, prompt, references, videoReferences, audioReferences);
-    if (!content.length) throw new Error("请输入视频提示词，或连接参考图片/视频/音频");
+    const inputs = await buildSeedanceContent(config, prompt, references, videoReferences, audioReferences);
+    if (!inputs.content.length) throw new Error("请输入视频提示词，或连接参考图片/视频/音频");
+    const modeType = resolveSeedanceModeType(config.videoModeType, references.length, capability);
     const payload = {
-        model: modelOptionName(model),
-        content,
-        ratio: normalizeSeedanceRatio(config.size),
-        resolution: normalizeSeedanceResolution(config.vquality, modelOptionName(model)),
-        duration: normalizeSeedanceDuration(config.videoSeconds),
+        model: requestModel,
+        content: inputs.content,
+        ratio: normalizeSeedanceRatio(config.size, requestModel),
+        resolution: normalizeSeedanceResolution(config.vquality, requestModel),
+        duration: normalizeSeedanceDuration(config.videoSeconds, requestModel),
         generate_audio: boolConfig(config.videoGenerateAudio, true),
         watermark: boolConfig(config.videoWatermark, false),
     };
 
     try {
         if (!isArkPlanBaseUrl(config.baseUrl)) {
-            const relayPrompt = String(content.find((item) => item.type === "text")?.text || prompt).trim();
+            const relayPrompt = String(inputs.content.find((item) => item.type === "text")?.text || prompt).trim();
             const response = await axios.post<ApiVideoResponse>(
                 aiApiUrl(config, "/videos"),
-                { model: payload.model, prompt: relayPrompt, duration: payload.duration, seconds: String(payload.duration), metadata: payload },
+                {
+                    model: payload.model,
+                    prompt: relayPrompt,
+                    duration: payload.duration,
+                    seconds: String(payload.duration),
+                    size: payload.ratio,
+                    resolution: payload.resolution,
+                    mode_type: modeType,
+                    images: inputs.images,
+                    videos: inputs.videos,
+                    audios: inputs.audios,
+                    n: 1,
+                    metadata: payload,
+                },
                 { headers: aiHeaders(config, "application/json"), signal: options?.signal },
             );
             const created = unwrapVideoResponse(response.data);
@@ -201,18 +231,27 @@ function seedanceApiUrl(config: AiConfig, taskId?: string) {
 
 async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
     const content: Array<Record<string, unknown>> = [];
+    const images: string[] = [];
+    const videos: string[] = [];
+    const audios: string[] = [];
     const text = buildSeedancePromptText(prompt, references, videoReferences, audioReferences);
     if (text) content.push({ type: "text", text });
-    for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
-        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image) }, role: "reference_image" });
+    for (const image of references) {
+        const url = await resolveSeedanceImageUrl(config, image);
+        images.push(url);
+        content.push({ type: "image_url", image_url: { url }, role: "reference_image" });
     }
-    for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: "reference_video" });
+    for (const video of videoReferences) {
+        const url = await resolveSeedanceVideoUrl(video);
+        videos.push(url);
+        content.push({ type: "video_url", video_url: { url }, role: "reference_video" });
     }
-    for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: "reference_audio" });
+    for (const audio of audioReferences) {
+        const url = await resolveSeedanceAudioUrl(audio);
+        audios.push(url);
+        content.push({ type: "audio_url", audio_url: { url }, role: "reference_audio" });
     }
-    return content;
+    return { content, images, videos, audios };
 }
 
 async function resolveSeedanceImageUrl(config: AiConfig, image: ReferenceImage) {

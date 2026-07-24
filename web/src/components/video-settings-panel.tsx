@@ -4,7 +4,19 @@ import { type ReactNode } from "react";
 import { Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
+import {
+    boolConfig,
+    isSeedanceVideoConfig,
+    normalizeSeedanceDuration,
+    normalizeSeedanceRatio,
+    normalizeSeedanceResolution,
+    seedanceCapabilitiesForModel,
+    seedanceDurationOptions,
+    seedanceModeOptions,
+    seedancePixelLabel,
+    seedanceRatioOptions,
+    seedanceResolutionOptions,
+} from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
@@ -26,7 +38,7 @@ const secondOptions = [4, 6, 8, 12, 15];
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoModeType" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -78,11 +90,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             >
                                 <SizePreview width={item.width} height={item.height} color={theme.node.text} />
                                 <span>{item.label}</span>
-                                {item.value === "auto" ? null : (
-                                    <span className="text-[11px] leading-none opacity-55">
-                                        {item.value}
-                                    </span>
-                                )}
+                                {item.value === "auto" ? null : <span className="text-[11px] leading-none opacity-55">{item.value}</span>}
                             </button>
                         ))}
                     </div>
@@ -104,9 +112,10 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
 
 function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
     const model = modelOptionName(config.model || config.videoModel);
+    const capabilities = seedanceCapabilitiesForModel(model);
     const resolution = normalizeSeedanceResolution(config.vquality, model);
-    const ratio = normalizeSeedanceRatio(config.size);
-    const duration = normalizeSeedanceDuration(config.videoSeconds);
+    const ratio = normalizeSeedanceRatio(config.size, model);
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
 
@@ -114,46 +123,63 @@ function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
-                <SettingGroup title="分辨率" color={theme.node.muted}>
-                    <div className="grid grid-cols-3 gap-2.5">
-                        {seedanceResolutionOptions.map((item) => {
-                            const disabled = item.value === "1080p" && isSeedanceFastModel(model);
+                <SettingGroup title="生成模式" color={theme.node.muted}>
+                    <div className="grid grid-cols-2 gap-2.5">
+                        {seedanceModeOptions.map((item) => {
+                            const disabled = item.value !== "auto" && !capabilities.modes.includes(item.value);
                             return (
-                                <OptionPill key={item.value} selected={resolution === item.value} disabled={disabled} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
+                                <OptionPill key={item.value} selected={(config.videoModeType || "auto") === item.value} disabled={disabled} theme={theme} onClick={() => onConfigChange("videoModeType", item.value)}>
                                     {item.label}
                                 </OptionPill>
                             );
                         })}
                     </div>
-                    {isSeedanceFastModel(model) ? <div className="text-[11px] leading-4 opacity-55">fast 模型不支持 1080p，会自动使用 720p。</div> : null}
+                </SettingGroup>
+                <SettingGroup title="分辨率" color={theme.node.muted}>
+                    <div className="grid grid-cols-4 gap-2.5">
+                        {seedanceResolutionOptions
+                            .filter((item) => !capabilities.resolution || item.value === capabilities.resolution)
+                            .map((item) => (
+                                <OptionPill key={item.value} selected={resolution === item.value} disabled={Boolean(capabilities.resolution)} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
+                                    {item.label}
+                                </OptionPill>
+                            ))}
+                    </div>
                 </SettingGroup>
                 <SettingGroup title="比例" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {seedanceRatioOptions.map((item) => (
-                            <button
-                                key={item.value}
-                                type="button"
-                                className="flex h-[68px] cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border bg-transparent px-1 text-sm transition hover:opacity-80"
-                                style={{ borderColor: ratio === item.value ? theme.node.text : theme.node.stroke, color: theme.node.text }}
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onClick={() => onConfigChange("size", item.value)}
-                            >
-                                <SizePreview width={ratioPreview(item.value).width} height={ratioPreview(item.value).height} color={theme.node.text} />
-                                <span>{item.label}</span>
-                                <span className="text-[10px] leading-none opacity-55">{item.value === "adaptive" ? "adaptive" : seedancePixelLabel(resolution, item.value)}</span>
-                            </button>
-                        ))}
+                        {seedanceRatioOptions
+                            .filter((item) => capabilities.ratios.includes(item.value))
+                            .map((item) => (
+                                <button
+                                    key={item.value}
+                                    type="button"
+                                    className="flex h-[68px] cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border bg-transparent px-1 text-sm transition hover:opacity-80"
+                                    style={{ borderColor: ratio === item.value ? theme.node.text : theme.node.stroke, color: theme.node.text }}
+                                    onMouseDown={(event) => event.stopPropagation()}
+                                    onClick={() => onConfigChange("size", item.value)}
+                                >
+                                    <SizePreview width={ratioPreview(item.value).width} height={ratioPreview(item.value).height} color={theme.node.text} />
+                                    <span>{item.label}</span>
+                                    <span className="text-[10px] leading-none opacity-55">{item.value === "adaptive" ? "adaptive" : seedancePixelLabel(resolution, item.value)}</span>
+                                </button>
+                            ))}
                     </div>
                 </SettingGroup>
                 <SettingGroup title="时长" color={theme.node.muted}>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {seedanceDurationOptions.map((value) => (
-                            <OptionPill key={value} selected={duration === value} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
-                                {value}s
-                            </OptionPill>
-                        ))}
+                        {seedanceDurationOptions
+                            .filter((value) => value >= capabilities.minDuration && value <= capabilities.maxDuration)
+                            .map((value) => (
+                                <OptionPill key={value} selected={duration === value} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
+                                    {value}s
+                                </OptionPill>
+                            ))}
                     </div>
-                    <NumberInput value={String(duration)} min={4} max={15} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                    <NumberInput value={String(duration)} min={capabilities.minDuration} max={capabilities.maxDuration} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                    <div className="text-[11px] leading-4 opacity-55">
+                        最多 {capabilities.maxImages} 图 / {capabilities.maxVideos} 视频 / {capabilities.maxAudios} 音频
+                    </div>
                 </SettingGroup>
                 <SettingGroup title="输出" color={theme.node.muted}>
                     <div className="grid gap-2 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
@@ -167,7 +193,8 @@ function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, 
 }
 
 export function videoResolutionLabel(value: string) {
-    return `${normalizeVideoResolutionValue(value)}p`;
+    const normalized = normalizeVideoResolutionValue(value);
+    return normalized.toLowerCase() === "4k" ? "4K" : `${normalized}p`;
 }
 
 export function videoSizeLabel(value: string) {
@@ -190,6 +217,7 @@ export function normalizeVideoSizeValue(value: string) {
 }
 
 export function normalizeVideoResolutionValue(value: string) {
+    if (String(value).toLowerCase() === "4k") return "4K";
     if (value === "480p" || value === "low") return "480";
     if (value === "720p" || value === "auto" || value === "high" || value === "medium") return "720";
     return value.replace(/p$/i, "") || "720";
@@ -197,7 +225,14 @@ export function normalizeVideoResolutionValue(value: string) {
 
 function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
     return (
-        <button type="button" disabled={disabled} className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35" style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()} onClick={onClick}>
+        <button
+            type="button"
+            disabled={disabled}
+            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35"
+            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={onClick}
+        >
             {children}
         </button>
     );
@@ -217,7 +252,14 @@ function SettingGroup({ title, color, children }: { title: string; color: string
 function ResolutionInput({ value, theme, onChange }: { value: string; theme: CanvasTheme; onChange: (value: string) => void }) {
     return (
         <label className="flex h-9 overflow-hidden rounded-full border text-sm" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-            <input type="number" min={1} className="min-w-0 flex-1 bg-transparent px-3 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" value={value} onChange={(event) => onChange(event.target.value)} onMouseDown={(event) => event.stopPropagation()} />
+            <input
+                type="number"
+                min={1}
+                className="min-w-0 flex-1 bg-transparent px-3 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                onMouseDown={(event) => event.stopPropagation()}
+            />
             <span className="grid w-7 place-items-center pr-1" style={{ color: theme.node.muted }}>
                 p
             </span>
@@ -231,14 +273,34 @@ function DimensionInput({ prefix, value, disabled, theme, onChange }: { prefix: 
             <span className="grid w-9 place-items-center" style={{ color: theme.node.muted }}>
                 {prefix}
             </span>
-            <input type="number" min={1} disabled={disabled} className="min-w-0 flex-1 bg-transparent px-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" value={value || ""} onChange={(event) => onChange(Number(event.target.value) || null)} onMouseDown={(event) => event.stopPropagation()} />
+            <input
+                type="number"
+                min={1}
+                disabled={disabled}
+                className="min-w-0 flex-1 bg-transparent px-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                value={value || ""}
+                onChange={(event) => onChange(Number(event.target.value) || null)}
+                onMouseDown={(event) => event.stopPropagation()}
+            />
         </label>
     );
 }
 
 function NumberInput({ value, min, max, theme, onChange }: { value: string; min: number; max: number; theme: CanvasTheme; onChange: (value: string) => void }) {
     const clampValue = (input: string) => String(Math.max(min, Math.min(max, Math.floor(Number(input) || min))));
-    return <input type="number" min={min} max={max} className="h-9 rounded-full border bg-transparent px-3 text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" style={{ borderColor: theme.node.stroke, color: theme.node.text, WebkitTextFillColor: theme.node.text }} value={value} onChange={(event) => onChange(event.target.value)} onBlur={(event) => onChange(clampValue(event.target.value))} onMouseDown={(event) => event.stopPropagation()} />;
+    return (
+        <input
+            type="number"
+            min={min}
+            max={max}
+            className="h-9 rounded-full border bg-transparent px-3 text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            style={{ borderColor: theme.node.stroke, color: theme.node.text, WebkitTextFillColor: theme.node.text }}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onBlur={(event) => onChange(clampValue(event.target.value))}
+            onMouseDown={(event) => event.stopPropagation()}
+        />
+    );
 }
 
 function SizePreview({ width, height, color }: { width: number; height: number; color: string }) {
