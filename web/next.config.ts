@@ -15,6 +15,11 @@ export default function nextConfig(phase: string): NextConfig {
 
     return {
         output: "standalone",
+        // Video reference media is sent through the same-origin AI proxy as JSON.
+        // Keep enough headroom for base64 expansion so Next does not truncate the body.
+        experimental: {
+            proxyClientMaxBodySize: "50mb",
+        },
         allowedDevOrigins: isDev ? ["*.*.*.*"] : [],
         typescript: {
             ignoreBuildErrors: true,
