@@ -77,31 +77,77 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
 
+// Fixed production channels. API credentials are held by the server-side proxy;
+// the browser only receives non-sensitive same-origin proxy paths.
+const FIXED_IMAGE_BASE_URL = "/image-api/image";
+const FIXED_VIDEO_BASE_URL = "/image-api/video";
+const FIXED_PROXY_KEY = "server-proxy";
+const FIXED_IMAGE_MODELS = ["gemini-3-pro-image", "gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview", "gpt-image-2"];
+const FIXED_VIDEO_MODELS = [
+    "grok-video-1.5",
+    "seedance-1080p-c47",
+    "seedance-1080p-c48",
+    "seedance-1080p-c53",
+    "seedance-1080p-c64",
+    "seedance-1080p-seedance-2.5-c54",
+    "seedance-480p-c47",
+    "seedance-480p-c48",
+    "seedance-480p-c53",
+    "seedance-480p-c64",
+    "seedance-480p-fast-c47",
+    "seedance-480p-fast-c48",
+    "seedance-480p-fast-c53",
+    "seedance-480p-fast-c64",
+    "seedance-480p-seedance-2.5-c54",
+    "seedance-480p-seedance-2.5-c63",
+    "seedance-4k-c47",
+    "seedance-4k-c48",
+    "seedance-4k-c64",
+    "seedance-720p-c47",
+    "seedance-720p-c48",
+    "seedance-720p-c49",
+    "seedance-720p-c50",
+    "seedance-720p-c53",
+    "seedance-720p-c64",
+    "seedance-720p-fast-c47",
+    "seedance-720p-fast-c48",
+    "seedance-720p-fast-c49",
+    "seedance-720p-fast-c50",
+    "seedance-720p-fast-c53",
+    "seedance-720p-fast-c58",
+    "seedance-720p-fast-c64",
+    "seedance-720p-seedance-2.5-c54",
+    "seedance-720p-seedance-2.5-c63",
+];
+
 export const defaultConfig: AiConfig = {
     channelMode: "local",
-    baseUrl: OPENAI_BASE_URL,
-    apiKey: "",
+    baseUrl: FIXED_IMAGE_BASE_URL,
+    apiKey: FIXED_PROXY_KEY,
     apiFormat: "openai",
     channels: [
         {
-            id: "default",
-            name: i18n.t("config.channels.defaultName"),
-            baseUrl: OPENAI_BASE_URL,
-            apiKey: "",
+            id: "image",
+            name: "图片",
+            baseUrl: FIXED_IMAGE_BASE_URL,
+            apiKey: FIXED_PROXY_KEY,
             apiFormat: "openai",
-            models: [
-                { name: "gpt-image-2", capability: "image" },
-                { name: "grok-imagine-video", capability: "video" },
-                { name: "gpt-5.5", capability: "text" },
-                { name: "gpt-4o-mini-tts", capability: "audio" },
-            ],
+            models: FIXED_IMAGE_MODELS.map((name) => ({ name, capability: "image" })),
+        },
+        {
+            id: "video",
+            name: "视频",
+            baseUrl: FIXED_VIDEO_BASE_URL,
+            apiKey: FIXED_PROXY_KEY,
+            apiFormat: "openai",
+            models: FIXED_VIDEO_MODELS.map((name) => ({ name, capability: "video" })),
         },
     ],
-    model: "default::gpt-image-2",
-    imageModel: "default::gpt-image-2",
-    videoModel: "default::grok-imagine-video",
-    textModel: "default::gpt-5.5",
-    audioModel: "default::gpt-4o-mini-tts",
+    model: "image::gpt-image-2",
+    imageModel: "image::gpt-image-2",
+    videoModel: "video::seedance-720p-c53",
+    textModel: "",
+    audioModel: "",
     audioVoice: "alloy",
     audioFormat: "mp3",
     audioSpeed: "1",
@@ -113,7 +159,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    models: [...FIXED_IMAGE_MODELS.map((name) => `image::${name}`), ...FIXED_VIDEO_MODELS.map((name) => `video::${name}`)],
     quality: "auto",
     size: "1:1",
     background: "",
@@ -205,7 +251,7 @@ function isAiConfigReady(config: AiConfig, model: string) {
 
 export const useConfigStore = create<ConfigStore>()(
     persist(
-        (set, get) => ({
+        (set) => ({
             config: defaultConfig,
             webdav: defaultWebdavSyncConfig,
             isConfigOpen: false,
@@ -213,17 +259,14 @@ export const useConfigStore = create<ConfigStore>()(
             shouldPromptContinue: false,
             updateConfig: (key, value) =>
                 set((state) => ({
-                    config: {
-                        ...state.config,
-                        [key]: value,
-                    },
+                    config: ["baseUrl", "apiKey", "apiFormat", "channels", "models"].includes(key)
+                        ? state.config
+                        : {
+                              ...state.config,
+                              [key]: value,
+                          },
                 })),
-            importChannelCredentials: (input) => {
-                const currentConfig = get().config;
-                const result = upsertChannelCredentials(currentConfig, input);
-                if (result.config !== currentConfig) set({ config: result.config });
-                return { status: result.status, channelName: result.channelName };
-            },
+            importChannelCredentials: () => ({ status: "updated", channelName: "固定渠道" }),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
                     webdav: {
@@ -253,13 +296,15 @@ export const useConfigStore = create<ConfigStore>()(
                     config: {
                         ...config,
                         channelMode: "local",
-                        apiFormat: normalizeApiFormat(config.apiFormat),
+                        baseUrl: defaultConfig.baseUrl,
+                        apiKey: defaultConfig.apiKey,
+                        apiFormat: "openai",
                         channels,
                         models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
+                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels) || defaultConfig.imageModel,
+                        videoModel: normalizeModelOptionValue(config.videoModel, channels) || defaultConfig.videoModel,
+                        textModel: "",
+                        audioModel: "",
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
@@ -435,29 +480,27 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
     };
 }
 
-function normalizeChannels(config: AiConfig) {
-    const persistedChannels = Array.isArray(config.channels) ? config.channels : [];
-    const channels = persistedChannels.map((channel, index) =>
-        createModelChannel({
-            ...channel,
-            id: channel.id || (index === 0 ? "default" : `channel-${index + 1}`),
-            name: channel.name || (index === 0 ? i18n.t("config.channels.defaultName") : i18n.t("config.channels.indexedName", { index: index + 1 })),
-            models: normalizeChannelModels(channel.models),
-        }),
-    );
-    if (!channels.length) {
-        channels.push(
-            createModelChannel({
-                id: "default",
-                name: i18n.t("config.channels.defaultName"),
-                baseUrl: config.baseUrl || defaultConfig.baseUrl,
-                apiKey: config.apiKey || "",
-                apiFormat: config.apiFormat || defaultConfig.apiFormat,
-                models: normalizeChannelModels([config.model, config.imageModel, config.videoModel, config.textModel, config.audioModel].map(modelOptionName)),
-            }),
-        );
-    }
-    return channels;
+function normalizeChannels(_config: AiConfig) {
+    // Ignore imported or previously persisted user channels for this deployment.
+    return defaultConfig.channels.map((channel) => createModelChannel(channel));
+}
+
+export function enforceFixedChannels(config: AiConfig): AiConfig {
+    const channels = normalizeChannels(config);
+    const models = modelOptionsFromChannels(channels);
+    return {
+        ...config,
+        channelMode: "local",
+        baseUrl: defaultConfig.baseUrl,
+        apiKey: defaultConfig.apiKey,
+        apiFormat: "openai",
+        channels,
+        models,
+        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels) || defaultConfig.imageModel,
+        videoModel: normalizeModelOptionValue(config.videoModel, channels) || defaultConfig.videoModel,
+        textModel: "",
+        audioModel: "",
+    };
 }
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
