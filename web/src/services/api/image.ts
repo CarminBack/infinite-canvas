@@ -115,6 +115,8 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+const EDIT_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+const EDIT_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
@@ -266,6 +268,14 @@ function parseImagePayload(payload: ImageApiResponse) {
     }
 
     return images;
+}
+
+function validateEditImages(files: File[]) {
+    if (!files.length) throw new Error(apiText("referenceImageReadFailed"));
+    for (const file of files) {
+        if (!EDIT_IMAGE_MIME_TYPES.has(file.type.toLowerCase())) throw new Error(apiText("referenceImageReadFailed"));
+        if (!file.size || file.size > EDIT_IMAGE_MAX_BYTES) throw new Error(apiText("referenceImageReadFailed"));
+    }
 }
 
 function readApiErrorMessage(value: unknown): string {
@@ -827,11 +837,16 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         formData.set("background", background);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    const imageField = files.length > 1 ? "image[]" : "image";
-    files.forEach((file) => formData.append(imageField, file));
+    validateEditImages(files);
+    // The compatibility layer accepts repeated `image` fields for multiple references.
+    files.forEach((file) => formData.append("image", file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, {
+            headers: aiHeaders(requestConfig),
+            timeout: 120000,
+            signal: options?.signal,
+        });
         const images = await parseImagePayload(response.data);
         return images;
     } catch (error) {
