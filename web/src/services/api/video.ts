@@ -11,7 +11,17 @@ import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id?: string; task_id?: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
+type VideoResponse = {
+    id?: string;
+    task_id?: string;
+    status?: string;
+    error?: { message?: string };
+    url?: string;
+    result_url?: string;
+    video_url?: string;
+    content?: { video_url?: string; url?: string } | null;
+    metadata?: { result_url?: string; video_url?: string; url?: string } | null;
+};
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
@@ -343,7 +353,9 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 }
 
 function videoResultUrl(payload: VideoResponse) {
-    return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url].find((url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)));
+    return [payload.video_url, payload.result_url, payload.url, payload.content?.video_url, payload.content?.url, payload.metadata?.video_url, payload.metadata?.result_url, payload.metadata?.url].find(
+        (url) => typeof url === "string" && (isPublicMediaUrl(url) || /\.mp4(\?|#|$)/i.test(url)),
+    );
 }
 
 function readApiErrorMessage(value: unknown): string {
