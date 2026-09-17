@@ -28,6 +28,7 @@ type VideoResponse = {
     result_url?: string;
     output?: string[];
     video?: { url?: string };
+    metadata?: { result_url?: string };
     error?: { message?: string };
 };
 type ApiVideoResponse = VideoResponse | { code?: number; data?: VideoResponse | null; msg?: string };
@@ -119,7 +120,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
         const status = video.status?.toLowerCase();
         if (["completed", "succeeded", "success", "done"].includes(status || "")) {
-            const url = video.url || video.video_url || video.result_url || video.video?.url || video.output?.[0];
+            const url = video.url || video.video_url || video.result_url || video.video?.url || video.metadata?.result_url || video.output?.[0];
             if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
