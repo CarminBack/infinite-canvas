@@ -161,8 +161,10 @@ async function aiProxy(req, url, res) {
     const session = requireSession(req, res);
     if (!session) return;
     const match = url.pathname.match(/^\/api\/ai\/(image|video|text|audio)(\/v1\/.*)$/);
-    if (!match || !CAPABILITIES.has(match[1])) return json(res, 404, { error: { message: "不允许的模型接口" } });
-    const [, capability, path] = match;
+    const legacyMatch = url.pathname.match(/^\/api\/ai(\/v1\/.*)$/);
+    const capability = match?.[1] || (legacyMatch ? inferCapability(legacyMatch[1]) : null);
+    const path = match?.[2] || legacyMatch?.[1];
+    if (!capability || !path || !CAPABILITIES.has(capability)) return json(res, 404, { error: { message: "不允许的模型接口" } });
     if (!ALLOWED.some(([method, pattern, caps]) => method === req.method && pattern.test(path) && caps.includes(capability))) return json(res, 404, { error: { message: "不允许的模型接口" } });
     if (!["GET", "HEAD"].includes(req.method) && req.headers.origin !== PUBLIC_ORIGIN) return json(res, 403, { error: { message: "请求来源校验失败" } });
     const upstreamUrl = new URL(path + url.search, capability === "image" ? IMAGE_ORIGIN : TOKEN_ORIGIN);
@@ -197,6 +199,15 @@ async function aiProxy(req, url, res) {
     } finally {
         if (timer) clearInterval(timer);
     }
+}
+
+function inferCapability(path) {
+    if (/^\/v1\/images\//.test(path)) return "image";
+    if (/^\/v1\/(videos|contents\/generations\/tasks)/.test(path)) return "video";
+    if (/^\/v1\/responses$/.test(path)) return "text";
+    if (/^\/v1\/chat\/completions$/.test(path)) return "audio";
+    if (/^\/v1\/audio\//.test(path)) return "audio";
+    return null;
 }
 
 function staticFile(req, url, res) {
