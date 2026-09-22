@@ -1,4 +1,4 @@
-# 构建 Vite 前端产物。
+# Build the v0.19 Vite frontend.
 FROM oven/bun:1.3.13 AS web-build
 
 WORKDIR /app/web
@@ -9,12 +9,18 @@ COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
 RUN bun run build
 
-# 运行镜像：只启动静态前端，AI 请求由浏览器前台直连用户自己的接口。
-FROM nginx:1.27-alpine
+# Serve the SPA and keep OAuth credentials in the server-side gateway.
+FROM node:22-alpine
 
-COPY --from=web-build /app/web/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY web/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
-RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
-
+ENV NODE_ENV=production \
+    PORT=3000 \
+    STATIC_DIR=/app/public \
+    CANVAS_DATA_DIR=/app/data
+WORKDIR /app
+COPY --from=web-build /app/web/dist ./public
+COPY server ./server
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1
+CMD ["node", "server/server.mjs"]
