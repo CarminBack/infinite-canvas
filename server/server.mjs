@@ -125,15 +125,14 @@ async function modelCatalog(req, res) {
     const session = requireSession(req, res);
     if (!session) return;
     try {
-        const [image, video, text, audio, pricing, imagePrice] = await Promise.all([
-            fetchModels(session.tokens.image), fetchModels(session.tokens.video), fetchModels(session.tokens.text).catch(() => []), fetchModels(session.tokens.audio).catch(() => []), fetchJson(new URL("/api/pricing", TOKEN_ORIGIN)).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
+        const [image, video, text, audio, videoDetails, imagePrice] = await Promise.all([
+            fetchModels(session.tokens.image), fetchModels(session.tokens.video), fetchModels(session.tokens.text).catch(() => []), fetchModels(session.tokens.audio).catch(() => []), fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), session.tokens.video).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
         ]);
-        const prices = new Map();
-        for (const item of pricing) if (item.model_name && item.enable_groups?.includes("Video") && (!prices.has(item.model_name) || item.quota_type !== 0)) prices.set(item.model_name, item);
+        const videoMetadata = new Map(videoDetails.map((item) => [item.id, item]));
         const defaults = { image: "gpt-image-2", video: "grok-image-video", text: "gpt-5.6-sol", audio: "gpt-4o-audio-preview" };
         return json(res, 200, {
             image: prioritize(image, defaults.image).map((id) => ({ id, priceLabel: imagePrice ? `1K $${Number(imagePrice["1k"]).toFixed(2)} · 2K $${Number(imagePrice["2k"]).toFixed(2)} · 4K $${Number(imagePrice["4k"]).toFixed(2)}` : undefined })),
-            video: prioritize(video, defaults.video).map((id) => ({ id, ...videoMeta(prices.get(id)) })),
+            video: prioritize(video, defaults.video).map((id) => ({ id, ...videoMeta(videoMetadata.get(id)) })),
             text: prioritize(text.filter(isTextModel), defaults.text).map((id) => ({ id })),
             audio: prioritize(audio, defaults.audio).map((id) => ({ id, priceLabel: "按量计费" })), defaults,
         });
@@ -253,7 +252,7 @@ function json(res, status, value) { const body = JSON.stringify(value); res.writ
 async function fetchJson(url, token) { const response = await fetch(url, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: "application/json" }, signal: AbortSignal.timeout(15000) }); const body = await response.json(); if (!response.ok) throw new Error(body.error?.message || body.message || `request failed (${response.status})`); return body; }
 async function fetchModels(token) { const payload = await fetchJson(new URL("/v1/models", TOKEN_ORIGIN), token); return [...new Set((payload.data || []).map((item) => item.id?.trim()).filter(Boolean))]; }
 function prioritize(models, preferred) { return [...new Set(models)].sort((a, b) => a === preferred ? -1 : b === preferred ? 1 : a.localeCompare(b)); }
-function videoMeta(item) { if (!item || !Number.isFinite(item.model_price)) return { priceLabel: "价格以 Token 页面为准", description: item?.description?.trim() || undefined }; const unit = item.quota_type === 2 ? `/秒` : item.quota_type === 1 ? `/条` : ""; const prefix = item.quota_type === 2 ? "按秒 · " : item.quota_type === 1 ? "按条 · " : ""; return { priceLabel: unit ? `${prefix}$${Number(item.model_price).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}${unit}` : "按量计费", description: item.description?.trim() || undefined }; }
+function videoMeta(item) { return item ? { priceLabel: item.price_label?.trim() || undefined, description: item.description?.trim() || undefined, limitations: Array.isArray(item.limitations) ? item.limitations.filter((value) => typeof value === "string" && value.trim()) : undefined } : { priceLabel: "价格以 Token 页面为准" }; }
 function isTextModel(id) { return !["image", "audio", "realtime", "video", "tts", "speech"].some((word) => id.toLowerCase().includes(word)); }
 function hash(value) { return createHash("sha256").update(value).digest("hex"); }
 function now() { return Math.floor(Date.now() / 1000); }

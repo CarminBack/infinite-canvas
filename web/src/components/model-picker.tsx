@@ -64,7 +64,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
-                className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="z-[1200] w-96 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
@@ -101,8 +101,9 @@ function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
         <span className="flex min-w-0 items-start gap-2 py-0.5">
             <ModelIcon model={model} />
             <span className="min-w-0">
-                <span className="block truncate">{modelOptionLabel(config, model)}</span>
-                {metadata?.priceLabel || metadata?.description ? <span className="block truncate text-xs text-muted-foreground">{[metadata.priceLabel, metadata.description].filter(Boolean).join(" · ")}</span> : null}
+                <span className="block truncate font-medium">{modelOptionLabel(config, model)}</span>
+                {metadata?.priceLabel || metadata?.description ? <span className="mt-0.5 block truncate text-xs text-muted-foreground">{[metadata.priceLabel, metadata.description].filter(Boolean).join(" · ")}</span> : null}
+                {metadata?.limitations?.length ? <span className="mt-0.5 block line-clamp-2 text-xs leading-4 text-muted-foreground/80">{metadata.limitations.join(" · ")}</span> : null}
             </span>
         </span>
     );

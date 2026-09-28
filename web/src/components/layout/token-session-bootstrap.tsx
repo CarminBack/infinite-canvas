@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import { useConfigStore, type AiConfig, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
-type CatalogItem = { id: string; priceLabel?: string; description?: string };
+type CatalogItem = { id: string; priceLabel?: string; description?: string; limitations?: string[] };
 type ModelCatalog = {
     image: CatalogItem[];
     video: CatalogItem[];
@@ -74,6 +74,6 @@ function applyCatalog(config: AiConfig, catalog: ModelCatalog): AiConfig {
 
 function catalogChannel(capability: ModelCapability, items: CatalogItem[]): ModelChannel | null {
     if (!items.length) return null;
-    const models: ChannelModel[] = items.map((item) => ({ name: item.id, capability, priceLabel: item.priceLabel, description: item.description }));
+    const models: ChannelModel[] = items.map((item) => ({ name: item.id, capability, priceLabel: item.priceLabel, description: item.description, limitations: item.limitations }));
     return { id: capability, name: CHANNEL_NAMES[capability], baseUrl: `/api/ai/${capability}`, apiKey: "session", apiFormat: "openai", models };
 }

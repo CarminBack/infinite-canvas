@@ -15,6 +15,7 @@ export type ChannelModel = {
     script?: string;
     priceLabel?: string;
     description?: string;
+    limitations?: string[];
 };
 
 export type ModelChannel = {
@@ -299,7 +300,8 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
         const priceLabel = typeof item === "string" ? undefined : item.priceLabel?.trim() || undefined;
         const description = typeof item === "string" ? undefined : item.description?.trim() || undefined;
-        result.push({ name, capability, script, priceLabel, description });
+        const limitations = typeof item === "string" ? undefined : item.limitations?.map((value) => value.trim()).filter(Boolean);
+        result.push({ name, capability, script, priceLabel, description, limitations: limitations?.length ? limitations : undefined });
     }
     return result;
 }
