@@ -126,7 +126,7 @@ async function modelCatalog(req, res) {
     if (!session) return;
     try {
         const [image, video, text, audio, pricing, imagePrice] = await Promise.all([
-            fetchModels(session.tokens.image), fetchModels(session.tokens.video), fetchModels(session.tokens.text).catch(() => []), fetchModels(session.tokens.audio).catch(() => []), fetchJson(new URL("/api/pricing", TOKEN_ORIGIN)).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data),
+            fetchModels(session.tokens.image), fetchModels(session.tokens.video), fetchModels(session.tokens.text).catch(() => []), fetchModels(session.tokens.audio).catch(() => []), fetchJson(new URL("/api/pricing", TOKEN_ORIGIN)).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
         ]);
         const prices = new Map();
         for (const item of pricing) if (item.model_name && item.enable_groups?.includes("Video") && (!prices.has(item.model_name) || item.quota_type !== 0)) prices.set(item.model_name, item);
