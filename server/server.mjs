@@ -188,6 +188,14 @@ async function aiProxy(req, url, res) {
             const responseHeaders = {};
             upstream.headers.forEach((value, key) => { if (!["set-cookie", "connection", "transfer-encoding", "content-encoding"].includes(key)) responseHeaders[key] = value; });
             responseHeaders["cache-control"] = "no-store";
+            if (upstream.status >= 400) {
+                // Log a short upstream error summary (no request body or credentials) to diagnose rejected tasks.
+                const text = await upstream.text();
+                console.error(`Canvas AI upstream ${upstream.status} ${req.method} ${capability}${path}: ${text.slice(0, 500)}`);
+                delete responseHeaders["content-length"];
+                res.writeHead(upstream.status, responseHeaders);
+                return res.end(text);
+            }
             res.writeHead(upstream.status, responseHeaders);
         }
         if (upstream.body) await Readable.fromWeb(upstream.body).pipe(res);

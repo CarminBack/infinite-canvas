@@ -151,9 +151,27 @@ function isTokenHostedConfig(config: AiConfig) {
     return config.baseUrl.trim().startsWith("/api/ai/");
 }
 
-function tokenModeType(mode: string, imageCount: number) {
+/** Mirrors the Token aistarslab plugin's strict Seedance channel limits (c47-c50) so requests are adjusted before submit. */
+function seedanceChannelLimits(model: string) {
+    const channel = modelOptionName(model)
+        .toLowerCase()
+        .match(/^seedance-.*-c(47|48|49|50)$/)?.[1];
+    if (!channel) return null;
+    if (channel === "49") return { frames: true, ratios: ["16:9", "9:16", "1:1"], maxImages: 9 };
+    if (channel === "50") return { frames: false, ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"], maxImages: 9 };
+    return { frames: false, ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], maxImages: 9 };
+}
+
+function tokenModeType(mode: string, imageCount: number, model: string) {
     if (!imageCount) return "text2video";
-    return mode === "frames" && imageCount === 2 ? "frames2video" : "image2video";
+    const framesAllowed = seedanceChannelLimits(model)?.frames ?? true;
+    // Channels without first/last-frame support fall back to image-to-video instead of failing upstream.
+    return mode === "frames" && imageCount === 2 && framesAllowed ? "frames2video" : "image2video";
+}
+
+function tokenVideoRatio(model: string, ratio: string) {
+    const ratios = seedanceChannelLimits(model)?.ratios;
+    return !ratios || ratios.includes(ratio) ? ratio : "16:9";
 }
 
 function tokenVideoResolution(model: string, quality: string) {
@@ -175,7 +193,9 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
     const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", options)));
     const requestModel = modelOptionName(model);
     const seconds = normalizeVideoSeconds(config.videoSeconds);
-    const ratio = videoAspectRatio(config.size);
+    const limits = seedanceChannelLimits(requestModel);
+    if (limits && images.length > limits.maxImages) throw new Error(`当前模型最多支持 ${limits.maxImages} 张参考图`);
+    const ratio = tokenVideoRatio(requestModel, videoAspectRatio(config.size));
     const resolution = tokenVideoResolution(requestModel, config.vquality);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
@@ -186,7 +206,7 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
         seconds,
         size: ratio,
         resolution,
-        mode_type: tokenModeType(config.videoMode, images.length),
+        mode_type: tokenModeType(config.videoMode, images.length, requestModel),
         images,
         videos,
         audios,
