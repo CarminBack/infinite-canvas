@@ -182,15 +182,39 @@ function tokenVideoResolution(model: string, quality: string) {
     return normalizeVideoResolution(quality);
 }
 
-async function referenceMediaToUrl(item: { name: string; type?: string; url?: string; storageKey?: string }, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
+// Token channels receive reference media as URLs: upload each file to the Canvas server first so the
+// task request stays small instead of inlining large base64 payloads that can time out in transit.
+const REFERENCE_UPLOAD_LIMIT_MB = { image: 30, video: 50, audio: 15 } as const;
+
+async function uploadReference(blob: Blob, kind: keyof typeof REFERENCE_UPLOAD_LIMIT_MB, signal?: AbortSignal) {
+    const limit = REFERENCE_UPLOAD_LIMIT_MB[kind];
+    if (blob.size > limit * 1024 * 1024) throw new Error(apiText("referenceTooLarge", { limit }));
+    try {
+        const response = await axios.post<{ url?: string }>("/api/uploads", blob, { headers: { "Content-Type": blob.type || "application/octet-stream" }, signal });
+        if (!response.data.url) throw new Error(apiText("referenceUploadFailed"));
+        return response.data.url;
+    } catch (error) {
+        throw new Error(readAxiosError(error, apiText("referenceUploadFailed")));
+    }
+}
+
+async function referenceMediaToUrl(item: { name: string; type?: string; url?: string; storageKey?: string }, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", kind: "video" | "audio", options?: RequestOptions) {
     if (isPublicMediaUrl(item.url || "") || item.url?.startsWith("asset://")) return item.url as string;
-    return readFileAsDataUrl(await referenceMediaToFile(item, fallbackName, errorKey, options));
+    return uploadReference(await referenceMediaToFile(item, fallbackName, errorKey, options), kind, options?.signal);
+}
+
+async function referenceImageToUrl(image: ReferenceImage, options?: RequestOptions) {
+    if (isPublicMediaUrl(image.url || "")) return image.url as string;
+    const dataUrl = await imageToDataUrl(image);
+    if (!dataUrl) throw new Error(apiText("referenceImageReadFailed"));
+    const blob = await (await fetch(dataUrl)).blob();
+    return uploadReference(await compressReferenceImage(blob), "image", options?.signal);
 }
 
 async function createTokenVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
-    const images = await Promise.all(references.map(async (image) => (isPublicMediaUrl(image.url || "") ? (image.url as string) : imageToDataUrl(image))));
-    const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", options)));
-    const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", options)));
+    const images = await Promise.all(references.map((image) => referenceImageToUrl(image, options)));
+    const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", "video", options)));
+    const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", "audio", options)));
     const requestModel = modelOptionName(model);
     const seconds = normalizeVideoSeconds(config.videoSeconds);
     const limits = seedanceChannelLimits(requestModel);
@@ -219,6 +243,40 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
         return { id: created.id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskCreateFailed")));
+    }
+}
+
+// Shrink large reference images before upload; small images in an accepted format are kept as-is.
+const REFERENCE_IMAGE_MAX_EDGE = 2048;
+const REFERENCE_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
+const REFERENCE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+async function compressReferenceImage(blob: Blob) {
+    const acceptedType = REFERENCE_IMAGE_TYPES.includes(blob.type);
+    try {
+        const bitmap = await createImageBitmap(blob);
+        const scale = Math.min(1, REFERENCE_IMAGE_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+        if (scale === 1 && blob.size <= REFERENCE_IMAGE_MAX_BYTES && acceptedType) {
+            bitmap.close();
+            return blob;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) {
+            bitmap.close();
+            return blob;
+        }
+        // JPEG has no alpha; paint white first so transparent areas do not turn black.
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        const compressed = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+        return compressed && (compressed.size < blob.size || !acceptedType) ? compressed : blob;
+    } catch {
+        return blob;
     }
 }
 
@@ -456,7 +514,7 @@ function readApiErrorMessage(value: unknown): string {
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return apiText("requestCanceled");
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; message?: string; code?: number | string }>(error)) {
-        if (!error.response && error.code === "ERR_NETWORK") return apiText("requestFailed");
+        if (!error.response && error.code === "ERR_NETWORK") return apiText("uploadInterrupted");
         const responseData = error.response?.data;
         return readApiErrorMessage(responseData) || statusMessage(error.response?.status, fallback);
     }

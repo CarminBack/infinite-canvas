@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { readdir, rm, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
 import http from "node:http";
 
@@ -31,6 +33,21 @@ const ALLOWED = [
 const MIME = { ".css": "text/css; charset=utf-8", ".gif": "image/gif", ".html": "text/html; charset=utf-8", ".ico": "image/x-icon", ".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp", ".woff": "font/woff", ".woff2": "font/woff2" };
 
 mkdirSync(DATA_DIR, { recursive: true });
+
+// Reference media uploaded by signed-in users, served by unguessable URL so upstream video providers can fetch it.
+const UPLOAD_DIR = join(DATA_DIR, "uploads");
+const UPLOAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const UPLOAD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const MB = 1024 * 1024;
+const UPLOAD_TYPES = {
+    "image/jpeg": [".jpg", 30 * MB], "image/png": [".png", 30 * MB], "image/webp": [".webp", 30 * MB],
+    "video/mp4": [".mp4", 50 * MB], "video/quicktime": [".mov", 50 * MB],
+    "audio/mpeg": [".mp3", 15 * MB], "audio/mp3": [".mp3", 15 * MB], "audio/wav": [".wav", 15 * MB], "audio/x-wav": [".wav", 15 * MB], "audio/wave": [".wav", 15 * MB], "audio/mp4": [".m4a", 15 * MB], "audio/x-m4a": [".m4a", 15 * MB],
+};
+const UPLOAD_EXT_MIME = { ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".mp4": "video/mp4", ".mov": "video/quicktime", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4" };
+mkdirSync(UPLOAD_DIR, { recursive: true });
+void cleanupUploads();
+setInterval(cleanupUploads, UPLOAD_CLEANUP_INTERVAL_MS).unref();
 const db = new DatabaseSync(join(DATA_DIR, "canvas.db"));
 db.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;
 CREATE TABLE IF NOT EXISTS canvas_sessions (
@@ -51,6 +68,8 @@ const server = http.createServer(async (req, res) => {
         if (url.pathname === "/api/model-catalog" && req.method === "GET") return modelCatalog(req, res);
         if (url.pathname === "/api/account/balance" && req.method === "GET") return balance(req, res);
         if (url.pathname.startsWith("/api/ai/")) return aiProxy(req, url, res);
+        if (url.pathname === "/api/uploads" && req.method === "POST") return uploadReference(req, res);
+        if (url.pathname.startsWith("/u/")) return serveUpload(req, url, res);
         if (url.pathname === "/login") return loginPage(req, url, res);
         return staticFile(req, url, res);
     } catch (error) {
@@ -205,6 +224,69 @@ async function aiProxy(req, url, res) {
         else if (!res.writableEnded) res.end(JSON.stringify({ error: { message: "模型服务暂时不可用" } }));
     } finally {
         if (timer) clearInterval(timer);
+    }
+}
+
+async function uploadReference(req, res) {
+    const session = requireSession(req, res);
+    if (!session) return;
+    if (req.headers.origin !== PUBLIC_ORIGIN) return json(res, 403, { error: "请求来源校验失败" });
+    const type = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    const rule = UPLOAD_TYPES[type];
+    if (!rule) return json(res, 415, { error: "不支持的文件格式，仅支持 jpg/png/webp、mp4/mov、mp3/wav/m4a" });
+    const [ext, maxBytes] = rule;
+    const tooLarge = () => json(res, 413, { error: `文件超过 ${maxBytes / MB}MB 上限，请压缩后再上传` });
+    if (Number(req.headers["content-length"] || 0) > maxBytes) return tooLarge();
+    const name = randomBytes(16).toString("hex") + ext;
+    const file = join(UPLOAD_DIR, name);
+    let size = 0;
+    const limiter = new Transform({
+        transform(chunk, _encoding, callback) {
+            size += chunk.length;
+            callback(size > maxBytes ? new Error("upload too large") : null, chunk);
+        },
+    });
+    try {
+        await pipeline(req, limiter, createWriteStream(file, { flags: "wx" }));
+    } catch {
+        await rm(file, { force: true });
+        res.setHeader("Connection", "close");
+        if (size > maxBytes) return tooLarge();
+        if (!res.headersSent && !res.destroyed) return json(res, 400, { error: "上传中断，请重试" });
+        return;
+    }
+    if (!size) {
+        await rm(file, { force: true });
+        return json(res, 400, { error: "文件为空" });
+    }
+    return json(res, 200, { url: `${PUBLIC_ORIGIN}/u/${name}`, bytes: size });
+}
+
+function serveUpload(req, url, res) {
+    const match = url.pathname.match(/^\/u\/([0-9a-f]{32})(\.[a-z0-9]+)$/);
+    if (!match || !UPLOAD_EXT_MIME[match[2]] || !["GET", "HEAD"].includes(req.method)) return json(res, 404, { error: "Not found" });
+    const file = join(UPLOAD_DIR, match[1] + match[2]);
+    let info;
+    try {
+        info = statSync(file);
+    } catch {
+        return json(res, 404, { error: "Not found" });
+    }
+    res.writeHead(200, { "Content-Type": UPLOAD_EXT_MIME[match[2]], "Content-Length": info.size, "Cache-Control": "public, max-age=86400", "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff" });
+    if (req.method === "HEAD") return res.end();
+    createReadStream(file).pipe(res);
+}
+
+async function cleanupUploads() {
+    const cutoff = Date.now() - UPLOAD_TTL_MS;
+    try {
+        for (const name of await readdir(UPLOAD_DIR)) {
+            const file = join(UPLOAD_DIR, name);
+            const info = await stat(file).catch(() => null);
+            if (info?.isFile() && info.mtimeMs < cutoff) await rm(file, { force: true });
+        }
+    } catch (error) {
+        console.error("Canvas upload cleanup failed", error instanceof Error ? error.message : error);
     }
 }
 
