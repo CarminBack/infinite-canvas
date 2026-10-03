@@ -174,6 +174,21 @@ function tokenVideoRatio(model: string, ratio: string) {
     return !ratios || ratios.includes(ratio) ? ratio : "16:9";
 }
 
+// Sora-protocol Token plugins (sora-2, sora-2-pro, grok-video-1.5) bill by a fixed pixel-size enum, not a ratio.
+const SORA_PROTOCOL_MODELS = ["sora-2", "sora-2-pro", "grok-video-1.5"];
+
+function isSoraProtocolModel(model: string) {
+    return SORA_PROTOCOL_MODELS.includes(modelOptionName(model).trim().toLowerCase());
+}
+
+function soraVideoSize(ratio: string, quality: string) {
+    const parsed = ratio.match(/^(\d+):(\d+)$/);
+    const portrait = parsed ? Number(parsed[2]) > Number(parsed[1]) : false;
+    const high = Number(normalizeVideoResolution(quality).replace(/p$/i, "")) >= 1024;
+    if (portrait) return high ? "1024x1792" : "720x1280";
+    return high ? "1792x1024" : "1280x720";
+}
+
 function tokenVideoResolution(model: string, quality: string) {
     const match = modelOptionName(model)
         .toLowerCase()
@@ -219,7 +234,9 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
     const seconds = normalizeVideoSeconds(config.videoSeconds);
     const limits = seedanceChannelLimits(requestModel);
     if (limits && images.length > limits.maxImages) throw new Error(`当前模型最多支持 ${limits.maxImages} 张参考图`);
+    if (requestModel.trim().toLowerCase() === "grok-video-1.5" && references.length !== 1) throw new Error(apiText("grokVideoReferenceRequired"));
     const ratio = tokenVideoRatio(requestModel, videoAspectRatio(config.size));
+    const size = isSoraProtocolModel(requestModel) ? soraVideoSize(ratio, config.vquality) : ratio;
     const resolution = tokenVideoResolution(requestModel, config.vquality);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
@@ -228,7 +245,7 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
         prompt,
         duration: Number(seconds),
         seconds,
-        size: ratio,
+        size,
         resolution,
         mode_type: tokenModeType(config.videoMode, images.length, requestModel),
         images,
