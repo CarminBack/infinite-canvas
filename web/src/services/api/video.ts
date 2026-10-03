@@ -8,6 +8,7 @@ import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } fro
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
+import { clampCapsRatio, clampCapsSeconds, videoModelCaps, type VideoModelCaps } from "@/lib/video-model-caps";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -151,27 +152,11 @@ function isTokenHostedConfig(config: AiConfig) {
     return config.baseUrl.trim().startsWith("/api/ai/");
 }
 
-/** Mirrors the Token aistarslab plugin's strict Seedance channel limits (c47-c50) so requests are adjusted before submit. */
-function seedanceChannelLimits(model: string) {
-    const channel = modelOptionName(model)
-        .toLowerCase()
-        .match(/^seedance-.*-c(47|48|49|50)$/)?.[1];
-    if (!channel) return null;
-    if (channel === "49") return { frames: true, ratios: ["16:9", "9:16", "1:1"], maxImages: 9 };
-    if (channel === "50") return { frames: false, ratios: ["16:9", "9:16", "1:1", "4:3", "3:4"], maxImages: 9 };
-    return { frames: false, ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], maxImages: 9 };
-}
-
-function tokenModeType(mode: string, imageCount: number, model: string) {
+/** Image-to-video unless the model supports first/last frames and exactly two images were supplied in frames mode. */
+function tokenModeType(mode: string, imageCount: number, caps: VideoModelCaps | null) {
     if (!imageCount) return "text2video";
-    const framesAllowed = seedanceChannelLimits(model)?.frames ?? true;
-    // Channels without first/last-frame support fall back to image-to-video instead of failing upstream.
+    const framesAllowed = caps?.frames ?? true;
     return mode === "frames" && imageCount === 2 && framesAllowed ? "frames2video" : "image2video";
-}
-
-function tokenVideoRatio(model: string, ratio: string) {
-    const ratios = seedanceChannelLimits(model)?.ratios;
-    return !ratios || ratios.includes(ratio) ? ratio : "16:9";
 }
 
 // Sora-protocol Token plugins (sora-2, sora-2-pro, grok-video-1.5) bill by a fixed pixel-size enum, not a ratio.
@@ -181,20 +166,21 @@ function isSoraProtocolModel(model: string) {
     return SORA_PROTOCOL_MODELS.includes(modelOptionName(model).trim().toLowerCase());
 }
 
-function soraVideoSize(ratio: string, quality: string) {
+function soraVideoSize(ratio: string, resolution: string) {
     const parsed = ratio.match(/^(\d+):(\d+)$/);
     const portrait = parsed ? Number(parsed[2]) > Number(parsed[1]) : false;
-    const high = Number(normalizeVideoResolution(quality).replace(/p$/i, "")) >= 1024;
+    const high = Number(normalizeVideoResolution(resolution).replace(/p$/i, "")) >= 1024;
     if (portrait) return high ? "1024x1792" : "720x1280";
     return high ? "1792x1024" : "1280x720";
 }
 
-function tokenVideoResolution(model: string, quality: string) {
-    const match = modelOptionName(model)
-        .toLowerCase()
-        .match(/seedance-(480p|720p|1080p|4k)(?:-|$)/);
-    if (match) return match[1] === "4k" ? "4K" : match[1];
-    return normalizeVideoResolution(quality);
+/** Reject requests that break the model's reference-media limits before uploading anything. */
+function assertCapsMedia(caps: VideoModelCaps | null, images: number, videos: number, audios: number) {
+    if (!caps) return;
+    if (caps.requiredImages !== undefined && images !== caps.requiredImages) throw new Error(apiText("capsImagesRequired", { count: caps.requiredImages }));
+    if (images > caps.maxImages) throw new Error(apiText("capsImagesLimit", { count: caps.maxImages }));
+    if (videos > caps.maxVideos) throw new Error(caps.maxVideos ? apiText("capsVideosLimit", { count: caps.maxVideos }) : apiText("capsVideosUnsupported"));
+    if (audios > caps.maxAudios) throw new Error(caps.maxAudios ? apiText("capsAudiosLimit", { count: caps.maxAudios }) : apiText("capsAudiosUnsupported"));
 }
 
 // Token channels receive reference media as URLs: upload each file to the Canvas server first so the
@@ -227,33 +213,37 @@ async function referenceImageToUrl(image: ReferenceImage, options?: RequestOptio
 }
 
 async function createTokenVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+    const requestModel = modelOptionName(model);
+    const caps = videoModelCaps(requestModel);
+    assertCapsMedia(caps, references.length, options?.videos?.length || 0, options?.audios?.length || 0);
     const images = await Promise.all(references.map((image) => referenceImageToUrl(image, options)));
     const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", "video", options)));
     const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", "audio", options)));
-    const requestModel = modelOptionName(model);
-    const seconds = normalizeVideoSeconds(config.videoSeconds);
-    const limits = seedanceChannelLimits(requestModel);
-    if (limits && images.length > limits.maxImages) throw new Error(`当前模型最多支持 ${limits.maxImages} 张参考图`);
-    if (requestModel.trim().toLowerCase() === "grok-video-1.5" && references.length !== 1) throw new Error(apiText("grokVideoReferenceRequired"));
-    const ratio = tokenVideoRatio(requestModel, videoAspectRatio(config.size));
-    const size = isSoraProtocolModel(requestModel) ? soraVideoSize(ratio, config.vquality) : ratio;
-    const resolution = tokenVideoResolution(requestModel, config.vquality);
+    const requestedSeconds = Number(normalizeVideoSeconds(config.videoSeconds));
+    const seconds = String(caps ? clampCapsSeconds(caps, requestedSeconds) : requestedSeconds);
+    const requestedRatio = videoAspectRatio(config.size);
+    const ratio = caps ? clampCapsRatio(caps, requestedRatio) : requestedRatio;
+    const resolution = caps?.resolution || normalizeVideoResolution(config.vquality);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
-    const body = {
-        model: requestModel,
-        prompt,
-        duration: Number(seconds),
-        seconds,
-        size,
-        resolution,
-        mode_type: tokenModeType(config.videoMode, images.length, requestModel),
-        images,
-        videos,
-        audios,
-        n: 1,
-        metadata: { model: requestModel, ratio, resolution, duration: Number(seconds), generate_audio: generateAudio, watermark },
-    };
+    // Sora-protocol plugins pass the JSON body through unchanged: send only fields the upstream accepts, with the
+    // pixel-size enum used for billing and the aspect ratio the grok upstream requires under extra.aspect_ratio.
+    const body = isSoraProtocolModel(requestModel)
+        ? { model: requestModel, prompt, seconds, size: soraVideoSize(ratio, resolution), resolution, extra: { aspect_ratio: ratio }, ...(images.length ? { image_urls: images } : {}) }
+        : {
+              model: requestModel,
+              prompt,
+              duration: Number(seconds),
+              seconds,
+              size: ratio,
+              resolution,
+              mode_type: tokenModeType(config.videoMode, images.length, caps),
+              images,
+              videos,
+              audios,
+              n: 1,
+              metadata: { model: requestModel, ratio, resolution, duration: Number(seconds), generate_audio: generateAudio, watermark },
+          };
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         if (!created.id) throw new Error(apiText("noVideoTaskId"));
