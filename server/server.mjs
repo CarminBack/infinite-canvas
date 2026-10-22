@@ -159,7 +159,7 @@ async function modelCatalog(req, res) {
             fetchModels(session.tokens.image, IMAGE_ORIGIN), fetchModels(session.tokens.video, VIDEO_ORIGIN), session.tokens.text ? fetchModels(session.tokens.text).catch(() => []) : [], session.tokens.audio ? fetchModels(session.tokens.audio).catch(() => []) : [], fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), session.tokens.video).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
         ]);
         const videoMetadata = new Map(videoDetails.map((item) => [item.id, item]));
-        const defaults = { image: "gpt-image-2", video: "grok-image-video", text: "gpt-5.6-sol", audio: "gpt-4o-audio-preview" };
+        const defaults = { image: "gpt-image-2", video: "seedance-720p-fast-c47", text: "gpt-5.6-sol", audio: "gpt-4o-audio-preview" };
         return json(res, 200, {
             image: prioritize(image, defaults.image).map((id) => ({ id, priceLabel: imagePrice ? `1K $${Number(imagePrice["1k"]).toFixed(2)} · 2K $${Number(imagePrice["2k"]).toFixed(2)} · 4K $${Number(imagePrice["4k"]).toFixed(2)}` : undefined })),
             video: prioritize(video, defaults.video).map((id) => ({ id, ...videoMeta(videoMetadata.get(id)) })),

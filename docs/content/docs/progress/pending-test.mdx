@@ -9,6 +9,8 @@ The current release needs manual verification in these areas:
 
 - Fixed-key subpath deployment: `/image` opens the video studio; image/video model catalogs, settings, reference uploads and playback should work under `/image/` without touching the existing main-site or Agnes upload routes. Fixed keys stay in server-only environment variables; text/audio capabilities remain unavailable unless configured. Real image/video generation requires a user-initiated paid acceptance test.
 
+- SPFX video default: a fresh browser selects `seedance-720p-fast-c47`; a valid model explicitly selected by the user remains selected.
+
 - Image Studio queue: clicking Generate should immediately add a generating record and leave the button available, so another prompt can be submitted before the current image finishes. Each queued task should later update to success or failure on its own, and the task currently being viewed should keep refreshing its results. After a page reload, unfinished records should become failed.
 - Token hosted deployment: unauthenticated page visits should redirect to Token OAuth login, successful authorization should return to the original SPA route, and the browser must receive only same-origin capability proxy URLs rather than real group API keys. Image, video, text, and audio model lists should sync from their Token groups; image resolution prices, video prices/descriptions, account balance, recharge link, logout, long-running image heartbeats, and existing encrypted SQLite sessions should continue to work after the v0.19.0 Vite migration.
 
