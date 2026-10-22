@@ -1,3 +1,5 @@
+import { appPath } from "@/constant/app-path";
+
 import { useEffect, useId, useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -116,11 +118,11 @@ function ModelIcon({ model }: { model: string }) {
 
 function resolveModelIcon(model: string) {
     const name = model.toLowerCase();
-    if (name.includes("claude") || name.includes("anthropic")) return "/icons/claude.svg";
-    if (name.includes("gemini") || name.includes("google")) return "/icons/gemini.svg";
-    if (name.includes("gpt") || name.includes("openai")) return "/icons/openai.svg";
-    if (name.includes("grok") || name.includes("grok")) return "/icons/grok.svg";
-    if (name.includes("deepseek") || name.includes("deepseek")) return "/icons/deepseek.svg";
-    if (name.includes("glm") || name.includes("glm")) return "/icons/glm.svg";
+    if (name.includes("claude") || name.includes("anthropic")) return appPath("/icons/claude.svg");
+    if (name.includes("gemini") || name.includes("google")) return appPath("/icons/gemini.svg");
+    if (name.includes("gpt") || name.includes("openai")) return appPath("/icons/openai.svg");
+    if (name.includes("grok") || name.includes("grok")) return appPath("/icons/grok.svg");
+    if (name.includes("deepseek") || name.includes("deepseek")) return appPath("/icons/deepseek.svg");
+    if (name.includes("glm") || name.includes("glm")) return appPath("/icons/glm.svg");
     return "";
 }
