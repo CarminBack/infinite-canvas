@@ -241,10 +241,18 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
               resolution,
               mode_type: tokenModeType(config.videoMode, images.length, caps),
               images,
-              videos,
               audios,
               n: 1,
-              metadata: { model: requestModel, ratio, resolution, duration: Number(seconds), generate_audio: generateAudio, watermark },
+              metadata: {
+                  model: requestModel,
+                  content: [
+                      ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+                      ...videos.map((url) => ({ type: "video_url", video_url: { url } })),
+                      ...audios.map((url) => ({ type: "audio_url", audio_url: { url } })),
+                      { type: "text", text: prompt },
+                  ],
+                  ratio, resolution, duration: Number(seconds), generate_audio: generateAudio, watermark,
+              },
           };
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
