@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 
+import { appPath } from "@/constant/app-path";
+
 import { useConfigStore, type AiConfig, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type CatalogItem = { id: string; priceLabel?: string; description?: string; limitations?: string[] };
@@ -28,14 +30,14 @@ export function TokenSessionBootstrap() {
 }
 
 async function bootstrap(signal: AbortSignal) {
-    const session = await fetch("/api/auth/session", { cache: "no-store", signal });
+    const session = await fetch(appPath("/api/auth/session"), { cache: "no-store", signal });
     if (session.status === 401) {
-        window.location.assign(`/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`);
+        window.location.assign(appPath(`/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`));
         return;
     }
     if (!session.ok) throw new Error("登录状态读取失败");
 
-    const response = await fetch("/api/model-catalog", { cache: "no-store", signal });
+    const response = await fetch(appPath("/api/model-catalog"), { cache: "no-store", signal });
     const catalog = (await response.json()) as ModelCatalog & { error?: string };
     if (!response.ok) throw new Error(catalog.error || "模型列表读取失败");
     useConfigStore.setState((state) => ({ config: applyCatalog(state.config, catalog) }));
@@ -58,7 +60,7 @@ function applyCatalog(config: AiConfig, catalog: ModelCatalog): AiConfig {
     const audioModel = selected("audio", config.audioModel);
     return {
         ...config,
-        baseUrl: "/api/ai/image",
+        baseUrl: appPath("/api/ai/image"),
         apiKey: "session",
         apiFormat: "openai",
         channels,
@@ -75,5 +77,5 @@ function applyCatalog(config: AiConfig, catalog: ModelCatalog): AiConfig {
 function catalogChannel(capability: ModelCapability, items: CatalogItem[]): ModelChannel | null {
     if (!items.length) return null;
     const models: ChannelModel[] = items.map((item) => ({ name: item.id, capability, priceLabel: item.priceLabel, description: item.description, limitations: item.limitations }));
-    return { id: capability, name: CHANNEL_NAMES[capability], baseUrl: `/api/ai/${capability}`, apiKey: "session", apiFormat: "openai", models };
+    return { id: capability, name: CHANNEL_NAMES[capability], baseUrl: appPath(`/api/ai/${capability}`), apiKey: "session", apiFormat: "openai", models };
 }

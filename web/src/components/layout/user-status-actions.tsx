@@ -1,4 +1,6 @@
 import type { CSSProperties } from "react";
+
+import { appPath } from "@/constant/app-path";
 import { useEffect, useState } from "react";
 import { Dropdown, Tooltip } from "antd";
 import { BookOpen, Keyboard, LogOut, Puzzle, Settings2, WalletCards } from "lucide-react";
@@ -58,9 +60,9 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
         if (loggingOut) return;
         setLoggingOut(true);
         try {
-            await fetch("/api/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
+            await fetch(appPath("/api/auth/logout"), { method: "POST", headers: { Accept: "application/json" } });
         } finally {
-            window.location.assign("/login");
+            window.location.assign(appPath("/login"));
         }
     };
 

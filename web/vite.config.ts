@@ -19,7 +19,7 @@ function localPluginsManifest(): Plugin {
             return readdirSync(pluginsDir)
                 .filter((file) => file.endsWith(".js"))
                 .sort()
-                .map((file) => `/plugins/${file}`);
+                .map((file) => `${process.env.VITE_BASE || "/"}plugins/${file}`);
         } catch {
             return [];
         }

@@ -1,3 +1,5 @@
+import { appPath } from "@/constant/app-path";
+
 import { registerNodeDefinitions, unregisterPluginNodes } from "@/lib/canvas/node-registry";
 import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
@@ -117,7 +119,7 @@ export async function ensurePluginsLoaded() {
 async function loadLocalPlugins() {
     let urls: unknown;
     try {
-        const response = await fetch("/plugins/index.json");
+        const response = await fetch(appPath("/plugins/index.json"));
         if (!response.ok) return;
         urls = await response.json();
     } catch {

@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+const listen = async (server) => { server.listen(0, "127.0.0.1"); await once(server, "listening"); return server.address().port; };
+
+test("fixed-key subpath gateway keeps credentials server-side and isolates uploads", { timeout: 30000 }, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "canvas-spfx-test-"));
+    const calls = [];
+    const upstream = http.createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        calls.push({ path: req.url, token: req.headers.authorization, body: Buffer.concat(chunks).toString() });
+        res.setHeader("Content-Type", "application/json");
+        if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: req.headers.authorization === "Bearer test-image-key" ? "test-image" : "test-video" }] }));
+        if (req.url === "/api/usage/token/video-models") return res.end(JSON.stringify({ data: [{ id: "test-video", price_label: "$0.25/秒", description: "Test video" }] }));
+        if (req.url === "/v1/image-group-pricing") return res.end(JSON.stringify({ data: { "1k": 0.1, "2k": 0.2, "4k": 0.4 } }));
+        if (req.url === "/v1/videos") return res.end(JSON.stringify({ id: "mock-task", status: "queued" }));
+        return res.end(JSON.stringify({ data: [] }));
+    });
+    const upstreamPort = await listen(upstream);
+    const reservation = http.createServer();
+    const gatewayPort = await listen(reservation);
+    await new Promise((resolve) => reservation.close(resolve));
+    await mkdir(join(root, "public"));
+    await writeFile(join(root, "public/index.html"), "<!doctype html><title>Canvas fixture</title>");
+    const origin = `http://127.0.0.1:${gatewayPort}`;
+    const child = spawn(process.execPath, [new URL("./server.mjs", import.meta.url).pathname], {
+        env: { ...process.env, PORT: String(gatewayPort), STATIC_DIR: join(root, "public"), CANVAS_DATA_DIR: join(root, "data"), CANVAS_BASE_PATH: "/image", CANVAS_PUBLIC_ORIGIN: origin, TOKEN_API_BASE_URL: `http://127.0.0.1:${upstreamPort}`, IMAGE_API_BASE_URL: `http://127.0.0.1:${upstreamPort}`, VIDEO_API_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CANVAS_IMAGE_API_KEY: "test-image-key", CANVAS_VIDEO_API_KEY: "test-video-key" },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    t.after(async () => { child.kill(); await once(child, "exit"); upstream.closeAllConnections(); await new Promise((resolve) => upstream.close(resolve)); await rm(root, { recursive: true, force: true }); });
+    await Promise.race([once(child.stdout, "data"), once(child, "exit").then(() => { throw new Error("Gateway failed to start"); })]);
+    const request = (path, init) => fetch(origin + path, init);
+    assert.equal((await request("/healthz")).status, 200);
+    assert.equal((await request("/image/video")).status, 200);
+    assert.equal((await request("/api/uploads", { method: "POST" })).status, 404);
+    const session = await (await request("/image/api/auth/session")).text();
+    assert.equal(JSON.parse(session).authenticated, true);
+    assert.ok(!session.includes("test-image-key") && !session.includes("test-video-key"));
+    const catalogResponse = await request("/image/api/model-catalog");
+    assert.equal(catalogResponse.status, 200);
+    const catalog = await catalogResponse.json();
+    assert.equal(catalog.image[0].id, "test-image");
+    assert.equal(catalog.video[0].id, "test-video");
+    assert.deepEqual(catalog.text, []);
+    assert.deepEqual(catalog.audio, []);
+    assert.ok(calls.every((call) => ["Bearer test-image-key", "Bearer test-video-key"].includes(call.token)));
+    const before = calls.length;
+    assert.equal((await request("/image/api/ai/video/v1/videos", { method: "POST", headers: { Origin: "https://wrong.invalid", "Content-Type": "application/json" }, body: "{}" })).status, 403);
+    assert.equal(calls.length, before);
+    const video = await request("/image/api/ai/video/v1/videos", { method: "POST", headers: { Origin: origin, Authorization: "Bearer caller-key", "Content-Type": "application/json" }, body: JSON.stringify({ model: "test-video" }) });
+    assert.equal(video.status, 200);
+    assert.equal((await video.json()).id, "mock-task");
+    assert.equal(calls.at(-1).token, "Bearer test-video-key");
+    const image = await request("/image/api/ai/image/v1/images/generations", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(image.headers.get("x-canvas-proxy-stream"), "1");
+    await image.json();
+    assert.equal(calls.at(-1).token, "Bearer test-image-key");
+    assert.equal((await request("/image/api/ai/text/v1/responses", { method: "POST", headers: { Origin: origin }, body: "{}" })).status, 403);
+    assert.equal((await request("/image/api/ai/image/v1/models")).status, 404);
+    const bytes = Buffer.from("test fixture bytes");
+    const uploadResponse = await request("/image/api/uploads", { method: "POST", headers: { Origin: origin, "Content-Type": "image/png" }, body: bytes });
+    assert.equal(uploadResponse.status, 200);
+    const upload = await uploadResponse.json();
+    assert.ok(upload.url.startsWith(origin + "/image/u/"));
+    assert.deepEqual(Buffer.from(await (await fetch(upload.url)).arrayBuffer()), bytes);
+    assert.equal((await request("/image/api/uploads", { method: "POST", headers: { Origin: origin, "Content-Type": "text/html" }, body: "<html>" })).status, 415);
+});

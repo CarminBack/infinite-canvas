@@ -11,8 +11,14 @@ const PORT = Number(process.env.PORT || 3000);
 const STATIC_DIR = process.env.STATIC_DIR || "/app/public";
 const DATA_DIR = process.env.CANVAS_DATA_DIR || "/app/data";
 const PUBLIC_ORIGIN = origin(process.env.CANVAS_PUBLIC_ORIGIN || "https://canvas.mewinyou.shop");
+const BASE_PATH = (process.env.CANVAS_BASE_PATH || "").replace(/\/$/, "");
+if (BASE_PATH && !/^\/[a-zA-Z0-9/_-]+$/.test(BASE_PATH)) throw new Error("Invalid CANVAS_BASE_PATH");
+const FIXED_TOKENS = { image: process.env.CANVAS_IMAGE_API_KEY?.trim(), video: process.env.CANVAS_VIDEO_API_KEY?.trim() };
+const FIXED_KEYS = Boolean(FIXED_TOKENS.image || FIXED_TOKENS.video);
+if (FIXED_KEYS && (!FIXED_TOKENS.image || !FIXED_TOKENS.video)) throw new Error("Both fixed image and video API keys are required");
 const TOKEN_ORIGIN = origin(process.env.TOKEN_API_BASE_URL || process.env.TOKEN_ISSUER_URL || "https://token.mewinyou.shop");
 const IMAGE_ORIGIN = origin(process.env.IMAGE_API_BASE_URL || "https://image-api.mewinyou.shop");
+const VIDEO_ORIGIN = origin(process.env.VIDEO_API_BASE_URL || TOKEN_ORIGIN);
 const CLIENT_ID = process.env.CANVAS_OAUTH_CLIENT_ID?.trim() || "canvas";
 const REDIRECT_URI = process.env.CANVAS_OAUTH_REDIRECT_URI?.trim() || `${PUBLIC_ORIGIN}/auth/callback`;
 const SESSION_TTL = validTtl(process.env.CANVAS_SESSION_TTL_SECONDS);
@@ -61,6 +67,11 @@ const server = http.createServer(async (req, res) => {
     try {
         const url = new URL(req.url || "/", PUBLIC_ORIGIN);
         if (url.pathname === "/healthz") return json(res, 200, { status: "ok" });
+        if (BASE_PATH) {
+            if (url.pathname !== BASE_PATH && !url.pathname.startsWith(`${BASE_PATH}/`)) return json(res, 404, { error: "Not found" });
+            url.pathname = url.pathname.slice(BASE_PATH.length) || "/";
+        }
+        if (FIXED_KEYS && url.pathname === "/api/auth/login") return redirect(res, "/video");
         if (url.pathname === "/api/auth/login" && req.method === "GET") return login(url, res);
         if (url.pathname === "/auth/callback" && req.method === "GET") return callback(req, url, res);
         if (url.pathname === "/api/auth/session" && req.method === "GET") return sessionInfo(req, res);
@@ -145,7 +156,7 @@ async function modelCatalog(req, res) {
     if (!session) return;
     try {
         const [image, video, text, audio, videoDetails, imagePrice] = await Promise.all([
-            fetchModels(session.tokens.image), fetchModels(session.tokens.video), fetchModels(session.tokens.text).catch(() => []), fetchModels(session.tokens.audio).catch(() => []), fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), session.tokens.video).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
+            fetchModels(session.tokens.image, IMAGE_ORIGIN), fetchModels(session.tokens.video, VIDEO_ORIGIN), session.tokens.text ? fetchModels(session.tokens.text).catch(() => []) : [], session.tokens.audio ? fetchModels(session.tokens.audio).catch(() => []) : [], fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), session.tokens.video).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
         ]);
         const videoMetadata = new Map(videoDetails.map((item) => [item.id, item]));
         const defaults = { image: "gpt-image-2", video: "grok-image-video", text: "gpt-5.6-sol", audio: "gpt-4o-audio-preview" };
@@ -183,9 +194,10 @@ async function aiProxy(req, url, res) {
     const capability = match?.[1] || (legacyMatch ? inferCapability(legacyMatch[1]) : null);
     const path = match?.[2] || legacyMatch?.[1];
     if (!capability || !path || !CAPABILITIES.has(capability)) return json(res, 404, { error: { message: "不允许的模型接口" } });
+    if (!session.tokens[capability]) return json(res, 403, { error: { message: "当前站点未配置此模型能力" } });
     if (!ALLOWED.some(([method, pattern, caps]) => method === req.method && pattern.test(path) && caps.includes(capability))) return json(res, 404, { error: { message: "不允许的模型接口" } });
     if (!["GET", "HEAD"].includes(req.method) && req.headers.origin !== PUBLIC_ORIGIN) return json(res, 403, { error: { message: "请求来源校验失败" } });
-    const upstreamUrl = new URL(path + url.search, capability === "image" ? IMAGE_ORIGIN : TOKEN_ORIGIN);
+    const upstreamUrl = new URL(path + url.search, capability === "image" ? IMAGE_ORIGIN : capability === "video" ? VIDEO_ORIGIN : TOKEN_ORIGIN);
     const headers = new Headers();
     for (const [key, value] of Object.entries(req.headers)) if (value && !["authorization", "cookie", "host", "origin", "referer", "content-length", "connection", "transfer-encoding", "accept-encoding", "forwarded", "x-forwarded-for", "x-real-ip"].includes(key)) headers.set(key, Array.isArray(value) ? value.join(",") : value);
     headers.set("Authorization", `Bearer ${session.tokens[capability]}`);
@@ -259,7 +271,7 @@ async function uploadReference(req, res) {
         await rm(file, { force: true });
         return json(res, 400, { error: "文件为空" });
     }
-    return json(res, 200, { url: `${PUBLIC_ORIGIN}/u/${name}`, bytes: size });
+    return json(res, 200, { url: `${PUBLIC_ORIGIN}${BASE_PATH}/u/${name}`, bytes: size });
 }
 
 function serveUpload(req, url, res) {
@@ -321,6 +333,7 @@ function loginPage(req, url, res) {
 }
 
 function getSession(req) {
+    if (FIXED_KEYS) return { issuer: TOKEN_ORIGIN, subject: "shared", username: "工作台", tokens: FIXED_TOKENS, expiresAt: now() + SESSION_TTL };
     const id = cookie(req, SESSION_COOKIE);
     if (!id) return null;
     const row = db.prepare("SELECT issuer, subject, username, token_ciphertext, expires_at FROM canvas_sessions WHERE session_hash = ?").get(hash(id));
@@ -337,10 +350,10 @@ function decrypt(value) { const [version, iv, tag, body] = value.split("."); if 
 function cookie(req, name) { for (const part of (req.headers.cookie || "").split(";")) { const [key, ...value] = part.trim().split("="); if (key === name) return value.join("="); } }
 function clearCookie(name) { return `${name}=; Max-Age=0; ${COOKIE_FLAGS}`; }
 function normalizeReturnTo(value) { if (!value?.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/"; try { const url = new URL(value, PUBLIC_ORIGIN); return url.origin === PUBLIC_ORIGIN && !url.pathname.startsWith("/auth/") && !url.pathname.startsWith("/api/auth/") ? `${url.pathname}${url.search}${url.hash}` : "/"; } catch { return "/"; } }
-function redirect(res, location, setCookie) { if (setCookie) res.setHeader("Set-Cookie", setCookie); res.writeHead(302, { Location: location, "Cache-Control": "no-store" }); res.end(); }
+function redirect(res, location, setCookie) { if (BASE_PATH && location.startsWith("/") && !location.startsWith("//") && location !== BASE_PATH && !location.startsWith(`${BASE_PATH}/`)) location = BASE_PATH + location; if (setCookie) res.setHeader("Set-Cookie", setCookie); res.writeHead(302, { Location: location, "Cache-Control": "no-store" }); res.end(); }
 function json(res, status, value) { const body = JSON.stringify(value); res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(body), "Cache-Control": "no-store" }); res.end(body); }
 async function fetchJson(url, token) { const response = await fetch(url, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: "application/json" }, signal: AbortSignal.timeout(15000) }); const body = await response.json(); if (!response.ok) throw new Error(body.error?.message || body.message || `request failed (${response.status})`); return body; }
-async function fetchModels(token) { const payload = await fetchJson(new URL("/v1/models", TOKEN_ORIGIN), token); return [...new Set((payload.data || []).map((item) => item.id?.trim()).filter(Boolean))]; }
+async function fetchModels(token, apiOrigin = TOKEN_ORIGIN) { const payload = await fetchJson(new URL("/v1/models", apiOrigin), token); return [...new Set((payload.data || []).map((item) => item.id?.trim()).filter(Boolean))]; }
 function prioritize(models, preferred) { return [...new Set(models)].sort((a, b) => a === preferred ? -1 : b === preferred ? 1 : a.localeCompare(b)); }
 function videoMeta(item) { return item ? { priceLabel: item.price_label?.trim() || undefined, description: item.description?.trim() || undefined, limitations: Array.isArray(item.limitations) ? item.limitations.filter((value) => typeof value === "string" && value.trim()) : undefined } : { priceLabel: "价格以 Token 页面为准" }; }
 function isTextModel(id) { return !["image", "audio", "realtime", "video", "tts", "speech"].some((word) => id.toLowerCase().includes(word)); }

@@ -1,3 +1,5 @@
+import { appPath } from "@/constant/app-path";
+
 import { modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 
 /** Capability limits for a Token-hosted video model, used by both the settings panel and request normalization. */
@@ -49,7 +51,7 @@ export function videoModelCaps(model: string): VideoModelCaps | null {
 
 /** Caps only apply to models served through the Token gateway; user-configured channels keep the generic controls. */
 export function tokenVideoModelCaps(config: AiConfig, model: string) {
-    if (!model || !resolveModelRequestConfig(config, model).baseUrl.trim().startsWith("/api/ai/")) return null;
+    if (!model || !resolveModelRequestConfig(config, model).baseUrl.trim().startsWith(appPath("/api/ai/"))) return null;
     return videoModelCaps(model);
 }
 

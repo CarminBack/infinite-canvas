@@ -7,6 +7,8 @@ RUN --mount=type=cache,target=/root/.bun/install/cache bun install --cache-dir=/
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
+ARG VITE_BASE=/
+ENV VITE_BASE=$VITE_BASE
 RUN bun run build
 
 # Serve the SPA and keep OAuth credentials in the server-side gateway.

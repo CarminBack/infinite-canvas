@@ -1,4 +1,6 @@
 import axios from "axios";
+
+import { appPath } from "@/constant/app-path";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
@@ -149,7 +151,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 
 /** Token-hosted channels go through the same-origin gateway and expect the unified JSON video protocol. */
 function isTokenHostedConfig(config: AiConfig) {
-    return config.baseUrl.trim().startsWith("/api/ai/");
+    return config.baseUrl.trim().startsWith(appPath("/api/ai/"));
 }
 
 /** Image-to-video unless the model supports first/last frames and exactly two images were supplied in frames mode. */
@@ -191,7 +193,7 @@ async function uploadReference(blob: Blob, kind: keyof typeof REFERENCE_UPLOAD_L
     const limit = REFERENCE_UPLOAD_LIMIT_MB[kind];
     if (blob.size > limit * 1024 * 1024) throw new Error(apiText("referenceTooLarge", { limit }));
     try {
-        const response = await axios.post<{ url?: string }>("/api/uploads", blob, { headers: { "Content-Type": blob.type || "application/octet-stream" }, signal });
+        const response = await axios.post<{ url?: string }>(appPath("/api/uploads"), blob, { headers: { "Content-Type": blob.type || "application/octet-stream" }, signal });
         if (!response.data.url) throw new Error(apiText("referenceUploadFailed"));
         return response.data.url;
     } catch (error) {
