@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Token video billing compatibility: text-only and reference-media requests omit the top-level `videos` field; image/video/audio reference URLs and the prompt are included in `metadata.content`. Verify no `plugin usage value must be a number` error and that reference media still reaches the model.
+
 - Image Studio queue: clicking Generate should immediately add a generating record and leave the button available, so another prompt can be submitted before the current image finishes. Each queued task should later update to success or failure on its own, and the task currently being viewed should keep refreshing its results. After a page reload, unfinished records should become failed.
 - Token hosted deployment: unauthenticated page visits should redirect to Token OAuth login, successful authorization should return to the original SPA route, and the browser must receive only same-origin capability proxy URLs rather than real group API keys. Image, video, text, and audio model lists should sync from their Token groups; image resolution prices, video prices/descriptions, account balance, recharge link, logout, long-running image heartbeats, and existing encrypted SQLite sessions should continue to work after the v0.19.0 Vite migration.
 
