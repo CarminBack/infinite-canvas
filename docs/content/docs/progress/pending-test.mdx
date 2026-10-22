@@ -9,6 +9,8 @@ The current release needs manual verification in these areas:
 
 - Fixed-key subpath deployment: `/image` opens the video studio; image/video model catalogs, settings, reference uploads and playback should work under `/image/` without touching the existing main-site or Agnes upload routes. Fixed keys stay in server-only environment variables; text/audio capabilities remain unavailable unless configured. Real image/video generation requires a user-initiated paid acceptance test.
 
+- SPFX video waiting: video studio and built-in canvas video polling continue every 2.5 seconds beyond 120 polls while pending, without a local total timeout. Completion saves the result; explicit task failures and query errors still stop with an error. Existing cancellation and refresh-resume behavior remain unchanged. Verify with mocked pending responses beyond the old limit; do not create a paid task for testing.
+
 - SPFX video default: a fresh browser selects `seedance-720p-fast-c47`; a valid model explicitly selected by the user remains selected.
 
 - Token video billing compatibility: text-only and reference-media requests omit the top-level `videos` field; image/video/audio reference URLs and the prompt are included in `metadata.content`. Verify no `plugin usage value must be a number` error and that reference media still reaches the model.
