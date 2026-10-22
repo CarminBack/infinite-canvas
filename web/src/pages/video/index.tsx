@@ -755,7 +755,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         size: log.size || config.size || "",
         resolution: normalizeResolution(log.resolution || config.vquality || ""),
         seconds: log.seconds || config.videoSeconds || "",
-        status: log.status === "failed" && log.task && ["视频生成超时，请稍后重试", "Video generation timed out. Try again later."].includes(log.error || "") ? "pending" : log.status || "success",
+        status: log.status || "success",
         task: log.task,
         video,
         error: log.error,
