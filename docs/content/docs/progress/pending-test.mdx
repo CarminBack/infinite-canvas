@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Video waiting and recovery: pending video tasks continue polling every 2.5 seconds beyond the former 120-query limit. Completion, explicit task failure, query errors, and cancellation retain their existing behavior. Reloading resumes failed records that have a task ID and exactly match the old Chinese or English local timeout message; it fetches the existing task without submitting a generation. Verify with mocked responses and existing task IDs only, without paid generation.
+
 - Token video billing compatibility: text-only and reference-media requests omit the top-level `videos` field; image/video/audio reference URLs and the prompt are included in `metadata.content`. Verify no `plugin usage value must be a number` error and that reference media still reaches the model.
 
 - Image Studio queue: clicking Generate should immediately add a generating record and leave the button available, so another prompt can be submitted before the current image finishes. Each queued task should later update to success or failure on its own, and the task currently being viewed should keep refreshing its results. After a page reload, unfinished records should become failed.
