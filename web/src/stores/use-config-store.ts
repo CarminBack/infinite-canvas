@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import type { VideoCapabilities } from "@/lib/video-model-caps";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -16,6 +17,7 @@ export type ChannelModel = {
     priceLabel?: string;
     description?: string;
     limitations?: string[];
+    videoCapabilities?: VideoCapabilities;
 };
 
 export type ModelChannel = {
@@ -301,7 +303,7 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         const priceLabel = typeof item === "string" ? undefined : item.priceLabel?.trim() || undefined;
         const description = typeof item === "string" ? undefined : item.description?.trim() || undefined;
         const limitations = typeof item === "string" ? undefined : item.limitations?.map((value) => value.trim()).filter(Boolean);
-        result.push({ name, capability, script, priceLabel, description, limitations: limitations?.length ? limitations : undefined });
+        result.push({ name, capability, script, priceLabel, description, limitations: limitations?.length ? limitations : undefined, videoCapabilities: typeof item === "string" ? undefined : item.videoCapabilities });
     }
     return result;
 }

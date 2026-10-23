@@ -12,13 +12,14 @@ const listen = async (server) => { server.listen(0, "127.0.0.1"); await once(ser
 test("fixed-key subpath gateway keeps credentials server-side and isolates uploads", { timeout: 30000 }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), "canvas-spfx-test-"));
     const calls = [];
+    const capabilities = { requestFormat: "unified_video_v1", resolutions: ["768p"], ratios: ["8:5"], minSeconds: 2, maxSeconds: 120, frames: false, maxVideos: 1, maxAudios: 0, referenceDurationRequired: true };
     const upstream = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
         calls.push({ path: req.url, token: req.headers.authorization, body: Buffer.concat(chunks).toString() });
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: req.headers.authorization === "Bearer test-image-key" ? "test-image" : "test-video" }] }));
-        if (req.url === "/api/usage/token/video-models") return res.end(JSON.stringify({ data: [{ id: "test-video", price_label: "$0.25/秒", description: "Test video" }] }));
+        if (req.url === "/api/usage/token/video-models") return res.end(JSON.stringify({ data: [{ id: "test-video", price_label: "$0.25/秒", description: "Test video", capabilities }] }));
         if (req.url === "/v1/image-group-pricing") return res.end(JSON.stringify({ data: { "1k": 0.1, "2k": 0.2, "4k": 0.4 } }));
         if (req.url === "/v1/videos") return res.end(JSON.stringify({ id: "mock-task", status: "queued" }));
         return res.end(JSON.stringify({ data: [] }));
@@ -48,16 +49,23 @@ test("fixed-key subpath gateway keeps credentials server-side and isolates uploa
     const catalog = await catalogResponse.json();
     assert.equal(catalog.image[0].id, "test-image");
     assert.equal(catalog.video[0].id, "test-video");
+    assert.deepEqual(catalog.video[0].capabilities, capabilities);
+    assert.equal(catalog.video[0].capabilities.maxAudios, 0);
+    assert.equal(catalog.video[0].capabilities.frames, false);
+    assert.equal(catalogResponse.headers.get("cache-control"), "no-store");
+    assert.ok(!JSON.stringify(catalog).includes("test-image-key") && !JSON.stringify(catalog).includes("test-video-key"));
     assert.deepEqual(catalog.text, []);
     assert.deepEqual(catalog.audio, []);
     assert.ok(calls.every((call) => ["Bearer test-image-key", "Bearer test-video-key"].includes(call.token)));
     const before = calls.length;
     assert.equal((await request("/image/api/ai/video/v1/videos", { method: "POST", headers: { Origin: "https://wrong.invalid", "Content-Type": "application/json" }, body: "{}" })).status, 403);
     assert.equal(calls.length, before);
-    const video = await request("/image/api/ai/video/v1/videos", { method: "POST", headers: { Origin: origin, Authorization: "Bearer caller-key", "Content-Type": "application/json" }, body: JSON.stringify({ model: "test-video" }) });
+    const videoBody = { model: "test-video", prompt: "animate", seconds: 90, aspect_ratio: "8:5", resolution: "768p", references: [{ type: "video", role: "reference", url: "https://cdn.example/ref.mp4", duration_seconds: 6.5 }] };
+    const video = await request("/image/api/ai/video/v1/videos", { method: "POST", headers: { Origin: origin, Authorization: "Bearer caller-key", "Content-Type": "application/json" }, body: JSON.stringify(videoBody) });
     assert.equal(video.status, 200);
     assert.equal((await video.json()).id, "mock-task");
     assert.equal(calls.at(-1).token, "Bearer test-video-key");
+    assert.deepEqual(JSON.parse(calls.at(-1).body), videoBody);
     const image = await request("/image/api/ai/image/v1/images/generations", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
     assert.equal(image.headers.get("x-canvas-proxy-stream"), "1");
     await image.json();

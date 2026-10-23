@@ -10,9 +10,10 @@ import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } fro
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
-import { clampCapsRatio, clampCapsSeconds, videoModelCaps, type VideoModelCaps } from "@/lib/video-model-caps";
+import { capsResolutionValue, inferCapsRatio, clampCapsSeconds, tokenVideoModelCaps, type VideoModelCaps } from "@/lib/video-model-caps";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import { buildUnifiedVideoRequest } from "@/lib/unified-video-request";
 
 type VideoResponse = { id: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null; metadata?: { result_url?: string } | null };
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
@@ -178,9 +179,9 @@ function soraVideoSize(ratio: string, resolution: string) {
 function assertCapsMedia(caps: VideoModelCaps | null, images: number, videos: number, audios: number) {
     if (!caps) return;
     if (caps.requiredImages !== undefined && images !== caps.requiredImages) throw new Error(apiText("capsImagesRequired", { count: caps.requiredImages }));
-    if (images > caps.maxImages) throw new Error(apiText("capsImagesLimit", { count: caps.maxImages }));
-    if (videos > caps.maxVideos) throw new Error(caps.maxVideos ? apiText("capsVideosLimit", { count: caps.maxVideos }) : apiText("capsVideosUnsupported"));
-    if (audios > caps.maxAudios) throw new Error(caps.maxAudios ? apiText("capsAudiosLimit", { count: caps.maxAudios }) : apiText("capsAudiosUnsupported"));
+    if (caps.maxImages !== undefined && images > caps.maxImages) throw new Error(apiText("capsImagesLimit", { count: caps.maxImages }));
+    if (caps.maxVideos !== undefined && videos > caps.maxVideos) throw new Error(caps.maxVideos ? apiText("capsVideosLimit", { count: caps.maxVideos }) : apiText("capsVideosUnsupported"));
+    if (caps.maxAudios !== undefined && audios > caps.maxAudios) throw new Error(caps.maxAudios ? apiText("capsAudiosLimit", { count: caps.maxAudios }) : apiText("capsAudiosUnsupported"));
 }
 
 // Token channels receive reference media as URLs: upload each file to the Canvas server first so the
@@ -214,21 +215,23 @@ async function referenceImageToUrl(image: ReferenceImage, options?: RequestOptio
 
 async function createTokenVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     const requestModel = modelOptionName(model);
-    const caps = videoModelCaps(requestModel);
+    const caps = tokenVideoModelCaps(config, model);
     assertCapsMedia(caps, references.length, options?.videos?.length || 0, options?.audios?.length || 0);
     const images = await Promise.all(references.map((image) => referenceImageToUrl(image, options)));
     const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", "video", options)));
     const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", "audio", options)));
-    const requestedSeconds = Number(normalizeVideoSeconds(config.videoSeconds));
+    const requestedSeconds = caps?.requestFormat === "unified_video_v1" ? Number(config.videoSeconds || "6") : Number(normalizeVideoSeconds(config.videoSeconds));
     const seconds = String(caps ? clampCapsSeconds(caps, requestedSeconds) : requestedSeconds);
     const requestedRatio = videoAspectRatio(config.size);
-    const ratio = caps ? clampCapsRatio(caps, requestedRatio) : requestedRatio;
-    const resolution = caps?.resolution || normalizeVideoResolution(config.vquality);
+    const ratio = caps ? inferCapsRatio(caps, config.size || requestedRatio) : requestedRatio;
+    const resolution = caps ? normalizeVideoResolution(capsResolutionValue(caps, config.vquality)) : normalizeVideoResolution(config.vquality);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
     // Sora-protocol plugins pass the JSON body through unchanged: send only fields the upstream accepts, with the
     // pixel-size enum used for billing and the aspect ratio the grok upstream requires under extra.aspect_ratio.
-    const body = isSoraProtocolModel(requestModel)
+    const body = caps?.requestFormat === "unified_video_v1"
+        ? buildUnifiedVideoRequest({ model: requestModel, prompt, seconds: Number(seconds), aspectRatio: ratio, resolution, frameMode: config.videoMode === "frames" && images.length > 0, images, videos: videos.map((url, index) => ({ url, durationMs: options?.videos?.[index]?.durationMs })), audios, caps })
+        : isSoraProtocolModel(requestModel)
         ? { model: requestModel, prompt, seconds, size: soraVideoSize(ratio, resolution), resolution, extra: { aspect_ratio: ratio }, ...(images.length ? { image_urls: images } : {}) }
         : {
               model: requestModel,

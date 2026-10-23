@@ -6,7 +6,7 @@ import i18n from "@/i18n";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio, parseVideoResolution, readVideoDimensions, VIDEO_SECONDS_MAX, VIDEO_SECONDS_MIN, videoRatioOptions } from "@/lib/media-size";
-import { capsResolutionValue, clampCapsRatio, clampCapsSeconds, tokenVideoModelCaps } from "@/lib/video-model-caps";
+import { capsResolutionValue, inferCapsRatio, clampCapsSeconds, tokenVideoModelCaps } from "@/lib/video-model-caps";
 import { type AiConfig } from "@/stores/use-config-store";
 
 const resolutionOptions = [
@@ -41,16 +41,17 @@ type VideoSettingsPanelProps = {
 export function VideoSettingsPanel({ config, onConfigChange, theme, model, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
     const { t } = useTranslation();
     const caps = tokenVideoModelCaps(config, model || config.model);
-    const rawSeconds = Number(clampVideoSeconds(config.videoSeconds || "6"));
+    const rawSeconds = Number(caps ? (config.videoSeconds || "6") : clampVideoSeconds(config.videoSeconds || "6"));
     const seconds = caps ? clampCapsSeconds(caps, rawSeconds) : rawSeconds;
     const videoMode = caps && !caps.frames ? "reference" : normalizeVideoModeValue(config.videoMode);
-    const resolution = caps ? capsResolutionValue(caps) : parseVideoResolution(config.vquality);
+    const resolution = caps ? capsResolutionValue(caps, parseVideoResolution(config.vquality)) : parseVideoResolution(config.vquality);
+    const declaredResolutions = caps?.resolutions || (caps?.resolution ? [caps.resolution] : []);
     const rawRatio = inferVideoRatio(config.size || "auto");
-    const selectedRatio = caps ? clampCapsRatio(caps, rawRatio) : rawRatio;
+    const selectedRatio = caps ? inferCapsRatio(caps, config.size || "auto") : rawRatio;
     const dimensions = readVideoDimensions(config.size || "auto", resolution, selectedRatio);
-    const ratioOptions = caps ? videoRatioOptions.filter((item) => caps.ratios.includes(item.value)) : videoRatioOptions;
-    const minSeconds = caps?.minSeconds ?? VIDEO_SECONDS_MIN;
-    const maxSeconds = caps?.maxSeconds ?? VIDEO_SECONDS_MAX;
+    const ratioOptions = caps?.ratios?.length ? caps.ratios.map((value) => { const [width, height] = value.split(":").map(Number); return { value, width, height }; }) : videoRatioOptions;
+    const minSeconds = caps?.secondsSteps?.[0] ?? caps?.minSeconds ?? Math.min(VIDEO_SECONDS_MIN, caps?.maxSeconds ?? VIDEO_SECONDS_MIN);
+    const maxSeconds = caps?.secondsSteps?.at(-1) ?? caps?.maxSeconds ?? Math.max(VIDEO_SECONDS_MAX, minSeconds);
     const applySize = (nextResolution: string, ratio: string) => {
         onConfigChange("vquality", nextResolution);
         onConfigChange("size", computeVideoSize(nextResolution, ratio));
@@ -62,12 +63,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, model, showT
 
     // Switching models can leave values the new model does not support; write the nearest valid value back.
     // Every condition compares against the corrected target, so once applied the effect settles without looping.
-    const capsKey = caps ? `${caps.resolution}|${caps.ratios.join(",")}|${caps.minSeconds}-${caps.maxSeconds}|${caps.frames}` : "";
+    const capsKey = JSON.stringify(caps);
     useEffect(() => {
         if (!caps) return;
-        if (parseVideoResolution(config.vquality) !== resolution) onConfigChange("vquality", resolution);
+        if (declaredResolutions.length && parseVideoResolution(config.vquality) !== resolution) onConfigChange("vquality", resolution);
         const targetSize = computeVideoSize(resolution, selectedRatio);
-        if ((config.size || "auto") !== targetSize) onConfigChange("size", targetSize);
+        if (caps.ratios?.length && (config.size || "auto") !== targetSize) onConfigChange("size", targetSize);
         if (rawSeconds !== seconds) onConfigChange("videoSeconds", String(seconds));
         if (normalizeVideoModeValue(config.videoMode) !== videoMode) onConfigChange("videoMode", videoMode);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,11 +79,9 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, model, showT
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">{t("settingsPanels.video.title")}</div> : null}
                 <SettingGroup title={t("settingsPanels.video.quality")} color={theme.node.muted}>
-                    {caps ? (
+                    {declaredResolutions.length ? (
                         <div className="grid grid-cols-4 gap-2.5">
-                            <OptionPill selected theme={theme} onClick={() => undefined}>
-                                {caps.resolution}
-                            </OptionPill>
+                            {declaredResolutions.map((label) => { const value = label === "4K" ? "2160" : label.replace(/p$/i, ""); return <OptionPill key={label} selected={resolution === value} theme={theme} onClick={() => selectResolution(value)}>{label}</OptionPill>; })}
                         </div>
                     ) : (
                         <div className="grid grid-cols-4 gap-2.5">
@@ -143,7 +142,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, model, showT
                 <SettingGroup title={t("settingsPanels.video.mode")} color={theme.node.muted}>
                     <div className="grid grid-cols-2 gap-2.5">
                         {videoModeOptions.map((item) => (
-                            <OptionPill key={item.value} selected={videoMode === item.value} disabled={item.value === "frames" && caps !== null && !caps.frames} theme={theme} onClick={() => onConfigChange("videoMode", item.value)}>
+                            <OptionPill key={item.value} selected={videoMode === item.value} disabled={item.value === "frames" && caps !== null && caps.frames !== true} theme={theme} onClick={() => onConfigChange("videoMode", item.value)}>
                                 {t(`settingsPanels.video.modes.${item.labelKey}`)}
                             </OptionPill>
                         ))}
@@ -151,8 +150,8 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, model, showT
                     {caps ? (
                         <div className="text-xs leading-5" style={{ color: theme.node.muted }}>
                             {[
-                                caps.frames ? "" : t("settingsPanels.video.framesUnsupported"),
-                                caps.requiredImages ? t("settingsPanels.video.imagesRequired", { count: caps.requiredImages }) : t("settingsPanels.video.modelLimits", { images: caps.maxImages, videos: caps.maxVideos, audios: caps.maxAudios }),
+                                caps.frames === undefined ? t("settingsPanels.video.capabilitiesUnknown") : caps.frames ? "" : t("settingsPanels.video.framesUnsupported"),
+                                caps.requiredImages ? t("settingsPanels.video.imagesRequired", { count: caps.requiredImages }) : t("settingsPanels.video.modelLimits", { images: caps.maxImages ?? "?", videos: caps.maxVideos ?? "?", audios: caps.maxAudios ?? "?" }),
                             ]
                                 .filter(Boolean)
                                 .join(" · ")}
