@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Dynamic video capabilities: Token-hosted models declaring `unified_video_v1` should expose backend-defined resolutions, aspect ratios, duration ranges or discrete values, frame support and media counts, including custom model names and aliases. Standard requests use `aspect_ratio`, `resolution` and typed `references`; ordinary images must not become frame pairs implicitly, and required source-video duration must come from the reference media. Check a newly declared model without adding frontend name rules. Unknown limits remain unknown, old/Sora protocols keep their existing requests, and all verification must use mocks unless paid generation is separately approved.
+
 - Video waiting: pending video tasks continue polling every 2.5 seconds beyond the former 120-query limit. Completion, explicit task failure, query errors, cancellation, and the existing refresh behavior for pending records remain unchanged. Old failed timeout records remain failed after reload. Verify with mocked responses only, without paid generation.
 
 - Token video billing compatibility: text-only and reference-media requests omit the top-level `videos` field; image/video/audio reference URLs and the prompt are included in `metadata.content`. Verify no `plugin usage value must be a number` error and that reference media still reaches the model.

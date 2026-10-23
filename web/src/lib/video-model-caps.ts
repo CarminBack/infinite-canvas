@@ -1,22 +1,25 @@
-import { modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 
-/** Capability limits for a Token-hosted video model, used by both the settings panel and request normalization. */
-export type VideoModelCaps = {
-    /** Fixed output resolution label (the model name encodes it), e.g. "720p" or "4K". */
-    resolution: string;
-    ratios: readonly string[];
-    minSeconds: number;
-    maxSeconds: number;
-    /** Discrete allowed durations; when set, only these values are valid. */
+import { inferVideoRatio, VIDEO_SECONDS_MIN, VIDEO_SECONDS_MAX } from "@/lib/media-size";
+
+/** Gateway declarations: omitted limits are unknown, not unlimited. */
+export type VideoCapabilities = {
+    maxPromptChars?: number;
+    requestFormat?: "unified_video_v1";
+    resolutions?: readonly string[];
+    ratios?: readonly string[];
+    minSeconds?: number;
+    maxSeconds?: number;
     secondsSteps?: readonly number[];
-    /** Whether first/last-frame generation is supported. */
-    frames: boolean;
-    maxImages: number;
-    maxVideos: number;
-    maxAudios: number;
-    /** Exact number of reference images required (e.g. grok-video-1.5 needs exactly one). */
+    frames?: boolean;
+    maxImages?: number;
+    maxVideos?: number;
+    maxAudios?: number;
     requiredImages?: number;
+    referenceDurationRequired?: boolean;
 };
+
+export type VideoModelCaps = VideoCapabilities & { resolution?: string };
 
 const SEEDANCE_RATIOS_6 = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] as const;
 
@@ -50,20 +53,41 @@ export function videoModelCaps(model: string): VideoModelCaps | null {
 /** Caps only apply to models served through the Token gateway; user-configured channels keep the generic controls. */
 export function tokenVideoModelCaps(config: AiConfig, model: string) {
     if (!model || !resolveModelRequestConfig(config, model).baseUrl.trim().startsWith("/api/ai/")) return null;
+    const name = modelOptionName(model);
+    const declared = resolveModelChannel(config, model).models.find((item) => item.name === name)?.videoCapabilities;
+    if (declared?.requestFormat === "unified_video_v1") {
+        return { ...declared, resolution: declared.resolutions?.length === 1 ? declared.resolutions[0] : undefined };
+    }
+    // Keep older gateways and plugins working; new models use backend declarations.
     return videoModelCaps(model);
 }
 
 /** Resolution value stored in the panel config (numeric pixels), derived from the fixed model resolution. */
-export function capsResolutionValue(caps: VideoModelCaps) {
-    return caps.resolution === "4K" ? "2160" : caps.resolution.replace(/p$/i, "");
+export function capsResolutionValue(caps: VideoModelCaps, current = "720") {
+    const options = caps.resolutions || (caps.resolution ? [caps.resolution] : []);
+    const value = options.find((item) => (item === "4K" ? "2160" : item.replace(/p$/i, "")) === current) || options[0];
+    return value ? (value === "4K" ? "2160" : value.replace(/p$/i, "")) : current;
+}
+
+export function inferCapsRatio(caps: VideoModelCaps, size: string) {
+    if (caps.ratios?.includes(size)) return size;
+    const pixels = size.match(/^(\d+)x(\d+)$/);
+    if (pixels && Number(pixels[2]) > 0 && caps.ratios?.length) {
+        const target = Number(pixels[1]) / Number(pixels[2]);
+        const distance = (ratio: string) => { const [width, height] = ratio.split(":").map(Number); return Math.abs(width / height - target); };
+        return caps.ratios.reduce((best, value) => distance(value) < distance(best) ? value : best);
+    }
+    return clampCapsRatio(caps, inferVideoRatio(size));
 }
 
 export function clampCapsRatio(caps: VideoModelCaps, ratio: string) {
-    return caps.ratios.includes(ratio) ? ratio : caps.ratios[0];
+    return !caps.ratios?.length || caps.ratios.includes(ratio) ? ratio : caps.ratios[0];
 }
 
 export function clampCapsSeconds(caps: VideoModelCaps, value: number) {
-    const seconds = Number.isFinite(value) ? Math.round(value) : caps.minSeconds;
+    const minSeconds = caps.secondsSteps?.[0] ?? caps.minSeconds ?? Math.min(VIDEO_SECONDS_MIN, caps.maxSeconds ?? VIDEO_SECONDS_MIN);
+    const maxSeconds = caps.secondsSteps?.at(-1) ?? caps.maxSeconds ?? Math.max(VIDEO_SECONDS_MAX, minSeconds);
+    const seconds = Number.isFinite(value) ? Math.round(value) : minSeconds;
     if (caps.secondsSteps?.length) return caps.secondsSteps.reduce((best, item) => (Math.abs(item - seconds) < Math.abs(best - seconds) ? item : best), caps.secondsSteps[0]);
-    return Math.max(caps.minSeconds, Math.min(caps.maxSeconds, seconds));
+    return Math.max(minSeconds, Math.min(maxSeconds, seconds));
 }
