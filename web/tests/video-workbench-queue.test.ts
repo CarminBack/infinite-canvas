@@ -87,6 +87,18 @@ test("video batch creates independent tasks and keeps concurrent submissions vis
     expect(h.successes).toContain("succeeded");
 });
 
+test("completed results remain visible when a later batch is submitted", async () => {
+    const h = await createHarness();
+    const snapshot = (text: string) => ({ text, config: { videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references: [], videos: [], audios: [] });
+    h.queueGeneration(snapshot("first"), 2);
+    for (let attempt = 0; attempt < 20 && h.polls.size !== 2; attempt++) await Promise.resolve();
+    h.polls.get("task-1")!({ status: "completed", result: { url: "video-1" } });
+    h.polls.get("task-2")!({ status: "completed", result: { url: "video-2" } });
+    for (let attempt = 0; attempt < 20 && h.liveJobIdsRef.current.size; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
+    h.queueGeneration(snapshot("second"), 1);
+    expect(h.getResults()).toHaveLength(3);
+});
+
 test("completed task artifact download errors stay recoverable on the original task", async () => {
     const h = await createHarness();
     const log = { id: "existing-log", createdAt: Date.now() - 1000, prompt: "already generated", model: "seedance-test", config: { videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references: [], videoRefs: [], audioRefs: [], durationMs: 0, size: "9:16", resolution: "720", seconds: "6", status: "pending" as const, task: { id: "task-already-completed", provider: "openai" as const, model: "seedance-test" } };

@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- SPFX cumulative video results: after a batch completes, submit another batch and confirm previous successful and failed cards remain in the current result area. New session still clears that area; history remains separate. Use mocked tasks only. This does not automatically recover older failed downloads or rebuild prior browser sessions.
+
 - SPFX Video Studio queue: select 1–10 videos (default 1; independent of the image count). One click creates separate pending records immediately, with one upstream task per video. The Generate button stays available for another prompt while tasks run. Verify out-of-order completion, one submission/query failure without affecting siblings, stable history selection while other tasks finish, per-record retry using its original prompt/model/references, and deletion without resurrecting a record. Existing pending task IDs resume polling after reload without new POSTs; interrupted submissions with no saved task ID become failed and are never automatically resubmitted. Keep continuous polling, `/image/` paths, server-only keys and the artifact egress route unchanged. Use intercepted/mock upstreams only; do not submit paid generation during verification.
 
 - SPFX Video Studio completed-task recovery: mock a completed upstream task whose `/content` request returns 502, confirm the history record says the task completed but result retrieval failed, preserves the original task ID, and retry performs only status/content requests without a new POST. Verify a genuine upstream failure without a task ID still offers ordinary retry. Do not submit paid generation during verification.

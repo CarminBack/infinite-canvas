@@ -229,7 +229,7 @@ export default function VideoPage() {
         ]);
         setPreviewLog(jobs[0]);
         const nextResults = jobs.map((log) => ({ id: log.id, status: "pending" as const }));
-        setResults((items) => [...items.filter((item) => liveJobIdsRef.current.has(item.id)), ...nextResults]);
+        setResults((items) => [...items, ...nextResults]);
         setClock(Date.now());
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
         message.success(t("videoWorkbench.queued", { count }));
