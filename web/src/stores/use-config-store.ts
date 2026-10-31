@@ -45,6 +45,7 @@ export type AiConfig = {
     audioSpeed: string;
     audioInstructions: string;
     videoSeconds: string;
+    videoCount: string;
     vquality: string;
     videoGenerateAudio: string;
     videoWatermark: string;
@@ -112,6 +113,7 @@ export const defaultConfig: AiConfig = {
     audioSpeed: "1",
     audioInstructions: "",
     videoSeconds: "6",
+    videoCount: "1",
     vquality: "720",
     videoGenerateAudio: "true",
     videoWatermark: "false",

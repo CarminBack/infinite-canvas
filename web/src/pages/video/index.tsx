@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Music, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Select, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -52,6 +52,8 @@ type GenerationLog = {
     model: string;
     config: GenerationLogConfig;
     references: ReferenceImage[];
+    videoRefs?: ReferenceVideo[];
+    audioRefs?: ReferenceAudio[];
     durationMs: number;
     size: string;
     resolution: string;
@@ -65,6 +67,7 @@ type GenerationLog = {
 type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoMode">;
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
+type VideoRequestSnapshot = { text: string; config: AiConfig; references: ReferenceImage[]; videos: ReferenceVideo[]; audios: ReferenceAudio[] };
 
 const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
@@ -76,6 +79,8 @@ export default function VideoPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
+    const liveJobIdsRef = useRef(new Set<string>());
+    const visibleLogIdsRef = useRef(new Set<string>());
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -88,13 +93,11 @@ export default function VideoPage() {
     const [audioRefs, setAudioRefs] = useState<ReferenceAudio[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
-    const [running, setRunning] = useState(false);
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-    const [startedAt, setStartedAt] = useState(0);
-    const [elapsedMs, setElapsedMs] = useState(0);
+    const [clock, setClock] = useState(0);
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -108,6 +111,9 @@ export default function VideoPage() {
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
+    const generationCount = Math.max(1, Math.min(10, Math.floor(Number(config.videoCount) || 1)));
+    const running = results.some((item) => item.status === "pending");
+    const elapsedMs = running && previewLog ? Math.max(0, (clock || Date.now()) - previewLog.createdAt) : 0;
     // Reference limits follow the selected model; models without known limits keep the original 7-image default.
     const modelCaps = tokenVideoModelCaps(effectiveConfig, model);
     const maxImages = modelCaps?.maxImages ?? 7;
@@ -137,10 +143,10 @@ export default function VideoPage() {
     };
 
     useEffect(() => {
-        if (!running || !startedAt) return;
-        const timer = window.setInterval(() => setElapsedMs(performance.now() - startedAt), 1000);
+        if (!running) return;
+        const timer = window.setInterval(() => setClock(Date.now()), 1000);
         return () => window.clearInterval(timer);
-    }, [running, startedAt]);
+    }, [running]);
 
     useEffect(() => {
         void refreshLogs();
@@ -207,25 +213,49 @@ export default function VideoPage() {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.invalidParams") });
             return;
         }
-        setElapsedMs(0);
-        setRunning(true);
+        queueGeneration(snapshot, generationCount, agentTaskId);
+    };
+
+    const queueGeneration = (snapshot: VideoRequestSnapshot, count: number, agentTaskId?: string) => {
+        const jobs = Array.from({ length: count }, () => ({
+            ...buildLog({ prompt: snapshot.text, model: snapshot.config.videoModel, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending" }),
+            videoRefs: snapshot.videos,
+            audioRefs: snapshot.audios,
+        }));
+        for (const log of jobs) liveJobIdsRef.current.add(log.id);
+        visibleLogIdsRef.current = new Set([
+            ...Array.from(visibleLogIdsRef.current).filter((id) => liveJobIdsRef.current.has(id)),
+            ...jobs.map((log) => log.id),
+        ]);
+        setPreviewLog(jobs[0]);
+        const nextResults = jobs.map((log) => ({ id: log.id, status: "pending" as const }));
+        setResults((items) => [...items.filter((item) => liveJobIdsRef.current.has(item.id)), ...nextResults]);
+        setClock(Date.now());
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
-        setPreviewLog(null);
-        setResults([{ id: nanoid(), status: "pending" }]);
-        const batchStartedAt = performance.now();
-        setStartedAt(batchStartedAt);
+        message.success(t("videoWorkbench.queued", { count }));
+        void Promise.allSettled(jobs.map((log) => runQueuedGeneration(log, snapshot))).then((settled) => {
+            const successCount = settled.filter((item) => item.status === "fulfilled" && item.value).length;
+            const failCount = count - successCount;
+            if (agentTaskId) updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount, error: successCount ? undefined : t("workbench.generationFailed") });
+            if (successCount === count) message.success(t("videoWorkbench.generatedCount", { count }));
+            else message.error(t("videoWorkbench.partialGenerated", { success: successCount, failed: failCount }));
+        });
+    };
+
+    const runQueuedGeneration = async (log: GenerationLog, snapshot: VideoRequestSnapshot) => {
+        let next = log;
         try {
+            await saveLog(next);
+            if (!liveJobIdsRef.current.has(log.id)) return false;
             const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { videos: snapshot.videos, audios: snapshot.audios });
-            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
-            await saveLog(log, false);
-            void pollGenerationLog(log, snapshot.config, agentTaskId);
+            if (!liveJobIdsRef.current.has(log.id)) return false;
+            next = { ...log, task };
+            await saveLog(next);
+            return await pollGenerationLog(next, snapshot.config);
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage }));
-            message.error(errorMessage);
-            setRunning(false);
+            return await failGenerationLog(next, error);
+        } finally {
+            liveJobIdsRef.current.delete(log.id);
         }
     };
 
@@ -235,15 +265,11 @@ export default function VideoPage() {
         processedCommandRef.current = videoCommand.nonce;
         clearVideoCommand();
         if (typeof videoCommand.prompt === "string") setPrompt(videoCommand.prompt);
-        if (videoCommand.run && running) {
-            if (videoCommand.taskId) updateAgentTask(videoCommand.taskId, { status: "failed", error: t("videoWorkbench.busy") });
-            return;
-        }
         if (videoCommand.run) {
             agentTaskIdRef.current = videoCommand.taskId;
             setAutoRunToken((value) => value + 1);
         }
-    }, [videoCommand, clearVideoCommand, running, updateAgentTask]);
+    }, [videoCommand, clearVideoCommand, updateAgentTask]);
 
     useEffect(() => {
         if (!autoRunToken) return;
@@ -266,8 +292,11 @@ export default function VideoPage() {
         return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references], videos: maxVideos ? [...videoRefs] : [], audios: maxAudios ? [...audioRefs] : [] };
     };
 
-    const retryResult = () => {
-        void generate();
+    const retryResult = (id: string) => {
+        const log = logs.find((item) => item.id === id);
+        if (!log) return;
+        const snapshot = { text: log.prompt, config: buildVideoConfig({ ...effectiveConfig, ...log.config }, log.model), references: [...log.references], videos: [...(log.videoRefs || [])], audios: [...(log.audioRefs || [])] };
+        queueGeneration(snapshot, 1);
     };
 
     const downloadVideo = (video: GeneratedVideo) => {
@@ -282,7 +311,7 @@ export default function VideoPage() {
             tags: [],
             source: t("videoWorkbench.source"),
             data: { url: video.url, storageKey: video.storageKey, width: video.width, height: video.height, bytes: video.bytes, mimeType: video.mimeType },
-            metadata: { source: "video-page", prompt },
+            metadata: { source: "video-page", prompt: logs.find((log) => log.video?.id === video.id)?.prompt || prompt },
         });
         message.success(t("common.addedToAssets"));
     };
@@ -302,9 +331,8 @@ export default function VideoPage() {
         setReferences([]);
         setVideoRefs([]);
         setAudioRefs([]);
+        visibleLogIdsRef.current.clear();
         setResults([]);
-        setElapsedMs(0);
-        setStartedAt(0);
         setSelectedLogIds([]);
         setPreviewLog(null);
     };
@@ -314,45 +342,85 @@ export default function VideoPage() {
             .filter((log) => selectedLogIds.includes(log.id))
             .map((log) => log.video?.storageKey)
             .filter((key): key is string => Boolean(key));
-        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(() => refreshLogs());
+        for (const id of selectedLogIds) {
+            liveJobIdsRef.current.delete(id);
+            visibleLogIdsRef.current.delete(id);
+        }
+        setLogs((items) => items.filter((item) => !selectedLogIds.includes(item.id)));
+        setResults((items) => items.filter((item) => !selectedLogIds.includes(item.id)));
+        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
-            setPreviewLog(null);
-            setResults([]);
+            setPreviewLog(logs.find((log) => visibleLogIdsRef.current.has(log.id)) || null);
         }
         setSelectedLogIds([]);
         setDeleteConfirmOpen(false);
     };
 
-    const saveLog = async (log: GenerationLog, resumePending = true) => {
+    const saveLog = async (log: GenerationLog) => {
+        if (!liveJobIdsRef.current.has(log.id)) return;
+        setLogs((items) => [log, ...items.filter((item) => item.id !== log.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
         await logStore.setItem(log.id, serializeLog(log));
-        await refreshLogs(resumePending);
+        if (!liveJobIdsRef.current.has(log.id)) await logStore.removeItem(log.id);
     };
 
-    const refreshLogs = async (resumePending = true) => {
+    const refreshLogs = async () => {
         const nextLogs = await readStoredLogs();
-        setLogs(nextLogs);
-        if (resumePending) resumePendingLogs(nextLogs);
-        return nextLogs;
+        const liveIds = new Set(liveJobIdsRef.current);
+        setLogs((items) => [
+            ...items.filter((item) => liveIds.has(item.id)),
+            ...nextLogs.filter((item) => !liveIds.has(item.id)),
+        ].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+        const pending = nextLogs.find((log) => log.status === "pending" && log.task);
+        if (!visibleLogIdsRef.current.size && pending) {
+            visibleLogIdsRef.current.add(pending.id);
+            setPreviewLog(pending);
+            setResults([{ id: pending.id, status: "pending" }]);
+        }
+        resumePendingLogs(nextLogs);
     };
 
     const resumePendingLogs = (items: GenerationLog[]) => {
         for (const log of items) {
-            if (log.status === "pending" && log.task) void pollGenerationLog(log);
+            if (log.status !== "pending" || liveJobIdsRef.current.has(log.id)) continue;
+            liveJobIdsRef.current.add(log.id);
+            if (log.task) void pollGenerationLog(log);
+            else void failGenerationLog(log, new Error(t("videoWorkbench.interrupted"))).finally(() => liveJobIdsRef.current.delete(log.id));
         }
     };
 
-    const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string) => {
-        if (!log.task || activeLogIdsRef.current.has(log.id)) return;
+    const updateVisibleLog = (log: GenerationLog) => {
+        if (!visibleLogIdsRef.current.has(log.id)) return;
+        setResults((items) => items.map((item) => item.id === log.id ? { id: log.id, status: log.status, video: log.video, error: log.error } : item));
+        setPreviewLog((current) => current?.id === log.id ? log : current);
+    };
+
+    const failGenerationLog = async (log: GenerationLog, error: unknown) => {
+        if (!liveJobIdsRef.current.has(log.id)) return false;
+        const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
+        const failed: GenerationLog = { ...log, status: "failed", durationMs: Date.now() - log.createdAt, error: errorMessage };
+        updateVisibleLog(failed);
+        try {
+            await saveLog(failed);
+        } catch {
+            message.error(t("videoWorkbench.saveFailed"));
+        }
+        return false;
+    };
+
+    const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig) => {
+        if (!log.task || activeLogIdsRef.current.has(log.id) || !liveJobIdsRef.current.has(log.id)) return false;
         activeLogIdsRef.current.add(log.id);
-        setRunning(true);
-        setStartedAt((value) => value || performance.now());
-        setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
         const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
         try {
-            while (true) {
+            while (liveJobIdsRef.current.has(log.id)) {
                 const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task);
+                if (!liveJobIdsRef.current.has(log.id)) return false;
                 if (state.status === "completed") {
                     const stored = await storeGeneratedVideo(state.result);
+                    if (!liveJobIdsRef.current.has(log.id)) {
+                        if (stored.storageKey) await deleteStoredMedia([stored.storageKey]);
+                        return false;
+                    }
                     const nextVideo: GeneratedVideo = {
                         id: nanoid(),
                         url: stored.url,
@@ -363,35 +431,31 @@ export default function VideoPage() {
                         bytes: stored.bytes,
                         mimeType: stored.mimeType,
                     };
-                    setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
-                    if (agentTaskId) updateAgentTask(agentTaskId, { status: "succeeded", successCount: 1, failCount: 0, error: undefined });
-                    await saveLog({ ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined });
-                    message.success(t("videoWorkbench.generated"));
-                    return;
+                    const completed: GenerationLog = { ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined };
+                    updateVisibleLog(completed);
+                    await saveLog(completed);
+                    return true;
                 }
                 if (state.status === "failed") throw new Error(state.error);
                 await delay(2500);
             }
+            return false;
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            setResults([{ id: log.id, status: "failed", error: errorMessage }]);
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog({ ...log, status: "failed", durationMs: Date.now() - log.createdAt, error: errorMessage });
-            message.error(errorMessage);
+            return await failGenerationLog(log, error);
         } finally {
             activeLogIdsRef.current.delete(log.id);
-            if (!activeLogIdsRef.current.size) {
-                setRunning(false);
-                setStartedAt(0);
-            }
+            liveJobIdsRef.current.delete(log.id);
         }
     };
 
     const previewGenerationLog = (log: GenerationLog) => {
+        visibleLogIdsRef.current = new Set([log.id]);
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
         setReferences(log.references || []);
+        setVideoRefs(log.videoRefs || []);
+        setAudioRefs(log.audioRefs || []);
         if (log.config.videoModel || log.model) updateConfig("videoModel", log.config.videoModel || log.model);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.vquality) updateConfig("vquality", log.config.vquality);
@@ -399,7 +463,7 @@ export default function VideoPage() {
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
         if (log.config.videoMode) updateConfig("videoMode", log.config.videoMode);
-        setResults(log.status === "pending" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || t("workbench.generationFailed") }]);
+        setResults([{ id: log.id, status: log.status, video: log.video, error: log.error }]);
     };
 
     return (
@@ -519,7 +583,7 @@ export default function VideoPage() {
                         </div>
 
                         <div className="mt-auto pt-6">
-                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
+                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} disabled={!canGenerate} onClick={() => void generate()}>
                                 {t("workbench.generate")}
                             </Button>
                         </div>
@@ -532,7 +596,7 @@ export default function VideoPage() {
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={retryResult} /> : <PendingVideoCard key={result.id} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => retryResult(result.id)} /> : <PendingVideoCard key={result.id} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
@@ -580,6 +644,16 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
             <label className="col-span-2 block min-w-0 sm:col-span-1">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
+            </label>
+            <label className="col-span-2 block min-w-0 sm:col-span-1">
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("videoWorkbench.count")}</span>
+                <Select
+                    className="w-full"
+                    aria-label={t("videoWorkbench.count")}
+                    value={Math.max(1, Math.min(10, Math.floor(Number(config.videoCount) || 1)))}
+                    options={Array.from({ length: 10 }, (_, index) => ({ value: index + 1, label: t("videoWorkbench.videos", { count: index + 1 }) }))}
+                    onChange={(value) => updateConfig("videoCount", String(value))}
+                />
             </label>
             <div className="col-span-2">
                 <VideoSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
@@ -742,6 +816,11 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         }),
     );
     const config = normalizeLogConfig(log);
+    const restoreReferenceUrls = (items: Array<ReferenceVideo | ReferenceAudio> = []) => Promise.all(items.map(async (item) => ({
+        ...item,
+        url: await resolveMediaUrl(item.storageKey, item.url || ""),
+    })));
+    const [videoRefs, audioRefs] = await Promise.all([restoreReferenceUrls(log.videoRefs), restoreReferenceUrls(log.audioRefs)]);
     return {
         id: log.id || nanoid(),
         createdAt: log.createdAt || Date.now(),
@@ -751,6 +830,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         model: log.model || config.videoModel || "",
         config,
         references,
+        videoRefs,
+        audioRefs,
         durationMs: log.durationMs || 0,
         size: log.size || config.size || "",
         resolution: normalizeResolution(log.resolution || config.vquality || ""),
@@ -767,6 +848,8 @@ function serializeLog(log: GenerationLog): GenerationLog {
         ...log,
         references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
         video: log.video?.storageKey ? { ...log.video, url: "" } : log.video,
+        videoRefs: (log.videoRefs || []).map((item) => ({ ...item, url: item.storageKey ? "" : item.url })),
+        audioRefs: (log.audioRefs || []).map((item) => ({ ...item, url: item.storageKey ? "" : item.url })),
     };
 }
 
