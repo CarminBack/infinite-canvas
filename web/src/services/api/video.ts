@@ -148,7 +148,18 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
     throw new Error(apiText("noPlayableVideo"));
 }
 
-/** Token-hosted channels go through the same-origin gateway and expect the unified JSON video protocol. */
+export class VideoArtifactDownloadError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "VideoArtifactDownloadError";
+    }
+}
+
+export function isVideoArtifactDownloadError(error: unknown): error is VideoArtifactDownloadError {
+    return error instanceof VideoArtifactDownloadError;
+}
+
+
 function isTokenHostedConfig(config: AiConfig) {
     return config.baseUrl.trim().startsWith(appPath("/api/ai/"));
 }
@@ -331,20 +342,25 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    let video: VideoResponse;
     try {
-        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
-        const url = videoResultUrl(video);
-        if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
-        if (["completed", "succeeded", "success", "done"].includes(video.status || "")) {
-            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
-            await assertVideoBlob(content.data);
-            return { status: "completed", result: { blob: content.data } };
-        }
-        if (["failed", "failure", "cancelled", "canceled", "expired"].includes(video.status || "")) return { status: "failed", error: readApiErrorMessage(video.error?.message) || apiText("videoGenerationFailed") };
-        return { status: "pending" };
+        video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
     }
+    const url = videoResultUrl(video);
+    if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
+    if (["completed", "succeeded", "success", "done"].includes(video.status || "")) {
+        try {
+            const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
+            await assertVideoBlob(content.data);
+            return { status: "completed", result: { blob: content.data } };
+        } catch (error) {
+            throw new VideoArtifactDownloadError(readAxiosError(error, apiText("videoDownloadFailed")));
+        }
+    }
+    if (["failed", "failure", "cancelled", "canceled", "expired"].includes(video.status || "")) return { status: "failed", error: readApiErrorMessage(video.error?.message) || apiText("videoGenerationFailed") };
+    return { status: "pending" };
 }
 
 async function videoResultFromUrl(url: string, options?: RequestOptions): Promise<VideoGenerationResult> {

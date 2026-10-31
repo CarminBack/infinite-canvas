@@ -15,7 +15,7 @@ import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
+import { createVideoGenerationTask, isVideoArtifactDownloadError, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -38,7 +38,7 @@ type GeneratedVideo = {
 
 type GenerationResult = {
     id: string;
-    status: "pending" | "success" | "failed";
+    status: "pending" | "success" | "failed" | "download_failed";
     video?: GeneratedVideo;
     error?: string;
 };
@@ -58,7 +58,7 @@ type GenerationLog = {
     size: string;
     resolution: string;
     seconds: string;
-    status: "pending" | "success" | "failed";
+    status: "pending" | "success" | "failed" | "download_failed";
     task?: VideoGenerationTask;
     video?: GeneratedVideo;
     error?: string;
@@ -296,7 +296,16 @@ export default function VideoPage() {
         const log = logs.find((item) => item.id === id);
         if (!log) return;
         const snapshot = { text: log.prompt, config: buildVideoConfig({ ...effectiveConfig, ...log.config }, log.model), references: [...log.references], videos: [...(log.videoRefs || [])], audios: [...(log.audioRefs || [])] };
-        queueGeneration(snapshot, 1);
+        if (!log.task) {
+            queueGeneration(snapshot, 1);
+            return;
+        }
+        const retrying: GenerationLog = { ...log, status: "pending", error: undefined };
+        liveJobIdsRef.current.add(log.id);
+        visibleLogIdsRef.current.add(log.id);
+        setPreviewLog(retrying);
+        setResults((items) => items.map((item) => item.id === id ? { id, status: "pending" } : item));
+        void saveLog(retrying).then(() => pollGenerationLog(retrying)).finally(() => liveJobIdsRef.current.delete(log.id));
     };
 
     const downloadVideo = (video: GeneratedVideo) => {
@@ -390,14 +399,14 @@ export default function VideoPage() {
 
     const updateVisibleLog = (log: GenerationLog) => {
         if (!visibleLogIdsRef.current.has(log.id)) return;
-        setResults((items) => items.map((item) => item.id === log.id ? { id: log.id, status: log.status, video: log.video, error: log.error } : item));
+        setResults((items) => items.map((item) => item.id === log.id ? { id: log.id, status: log.status === "download_failed" ? "failed" : log.status, video: log.video, error: log.error } : item));
         setPreviewLog((current) => current?.id === log.id ? log : current);
     };
 
-    const failGenerationLog = async (log: GenerationLog, error: unknown) => {
+    const failGenerationLog = async (log: GenerationLog, error: unknown, status: GenerationLog["status"] = "failed") => {
         if (!liveJobIdsRef.current.has(log.id)) return false;
         const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-        const failed: GenerationLog = { ...log, status: "failed", durationMs: Date.now() - log.createdAt, error: errorMessage };
+        const failed: GenerationLog = { ...log, status, durationMs: Date.now() - log.createdAt, error: status === "download_failed" ? t("videoWorkbench.artifactDownloadFailed", { error: errorMessage }) : errorMessage };
         updateVisibleLog(failed);
         try {
             await saveLog(failed);
@@ -441,7 +450,7 @@ export default function VideoPage() {
             }
             return false;
         } catch (error) {
-            return await failGenerationLog(log, error);
+            return await failGenerationLog(log, error, isVideoArtifactDownloadError(error) ? "download_failed" : "failed");
         } finally {
             activeLogIdsRef.current.delete(log.id);
             liveJobIdsRef.current.delete(log.id);
@@ -463,7 +472,7 @@ export default function VideoPage() {
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
         if (log.config.videoMode) updateConfig("videoMode", log.config.videoMode);
-        setResults([{ id: log.id, status: log.status, video: log.video, error: log.error }]);
+        setResults([{ id: log.id, status: log.status === "download_failed" ? "failed" : log.status, video: log.video, error: log.error }]);
     };
 
     return (
@@ -596,7 +605,7 @@ export default function VideoPage() {
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={() => retryResult(result.id)} /> : <PendingVideoCard key={result.id} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard error={result.error || t("workbench.generationFailed")} retryLabel={logs.find((log) => log.id === result.id)?.task ? t("videoWorkbench.retryDownload") : t("workbench.retry")} key={result.id} onRetry={() => retryResult(result.id)} /> : <PendingVideoCard key={result.id} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
@@ -700,7 +709,7 @@ function PendingVideoCard() {
     );
 }
 
-function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => void }) {
+function FailedVideoCard({ error, retryLabel, onRetry }: { error: string; retryLabel: string; onRetry: () => void }) {
     const { t } = useTranslation();
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
@@ -712,7 +721,7 @@ function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => voi
             </div>
             <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
                 <Button size="small" danger onClick={onRetry}>
-                    {t("workbench.retry")}
+                    {retryLabel}
                 </Button>
             </div>
         </div>

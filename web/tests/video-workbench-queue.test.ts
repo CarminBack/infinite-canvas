@@ -7,9 +7,11 @@ const updateSource = page.slice(page.indexOf("    const updateVisibleLog ="), pa
 const pollSource = page.slice(page.indexOf("    const pollGenerationLog ="), page.indexOf("    const previewGenerationLog ="));
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+class MockArtifactDownloadError extends Error {}
 
 async function createHarness() {
     let sequence = 0;
+    let storeError: unknown;
     let results: any[] = [];
     const saved = new Map<string, any>();
     const created: Array<{ id: string; prompt: string; references: unknown[] }> = [];
@@ -38,7 +40,12 @@ async function createHarness() {
             return { id, model: config.videoModel };
         },
         pollVideoGenerationTask: (_config: any, task: { id: string }) => new Promise((resolve) => polls.set(task.id, resolve)),
-        storeGeneratedVideo: async (result: any) => ({ url: result.url, storageKey: `stored-${result.url}`, width: 720, height: 1280, bytes: 1234, mimeType: "video/mp4" }),
+        storeGeneratedVideo: async (result: any) => {
+            if (storeError) throw storeError;
+            return { url: result.url, storageKey: `stored-${result.url}`, width: 720, height: 1280, bytes: 1234, mimeType: "video/mp4" };
+        },
+        isVideoArtifactDownloadError: (error: unknown) => error instanceof MockArtifactDownloadError,
+        setStoreError: (error: unknown) => { storeError = error; },
         deleteStoredMedia: async () => {},
         delay: async () => {},
         created, polls, saved, errors, successes,
@@ -78,6 +85,40 @@ test("video batch creates independent tasks and keeps concurrent submissions vis
     expect(h.getResults().filter((item: any) => item.status === "success")).toHaveLength(4);
     expect(h.getResults().filter((item: any) => item.status === "failed")).toHaveLength(1);
     expect(h.successes).toContain("succeeded");
+});
+
+test("completed task artifact download errors stay recoverable on the original task", async () => {
+    const h = await createHarness();
+    const log = { id: "existing-log", createdAt: Date.now() - 1000, prompt: "already generated", model: "seedance-test", config: { videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references: [], videoRefs: [], audioRefs: [], durationMs: 0, size: "9:16", resolution: "720", seconds: "6", status: "pending" as const, task: { id: "task-already-completed", provider: "openai" as const, model: "seedance-test" } };
+    h.liveJobIdsRef.current.add(log.id);
+    h.visibleLogIdsRef.current.add(log.id);
+    h.setStoreError(new MockArtifactDownloadError("artifact endpoint returned 502"));
+    const polling = h.pollGenerationLog(log);
+    for (let attempt = 0; attempt < 20 && !h.polls.has(log.task.id); attempt++) await Promise.resolve();
+    h.polls.get(log.task.id)!({ status: "completed", result: { url: "video" } });
+    expect(await polling).toBe(false);
+    const persisted: any = h.saved.get(log.id);
+    expect(persisted.status).toBe("download_failed");
+    expect(persisted.task.id).toBe(log.task.id);
+    expect(h.created).toHaveLength(0);
+});
+
+test("retrying a record with a task ID rechecks that task instead of creating another", async () => {
+    const source = page.slice(page.indexOf("    const retryResult ="), page.indexOf("\n\n    const downloadVideo ="));
+    const calls: any[] = [];
+    const existing = { id: "record-1", task: { id: "task-existing" }, prompt: "p", model: "m", config: {}, references: [], videoRefs: [], audioRefs: [] };
+    const env = {
+        logs: [existing], effectiveConfig: {}, buildVideoConfig: () => ({}), queueGeneration: (...args: any[]) => calls.push(["create", ...args]),
+        liveJobIdsRef: { current: new Set<string>() }, visibleLogIdsRef: { current: new Set<string>() },
+        setPreviewLog: () => {}, setResults: () => {}, saveLog: async (log: any) => calls.push(["save", log]),
+        pollGenerationLog: async (log: any) => calls.push(["poll", log.task.id]),
+    };
+    const make = new AsyncFunction(...Object.keys(env), `${transpiler.transformSync(source)}; return retryResult;`);
+    const retryResult = await make(...Object.values(env));
+    retryResult(existing.id);
+    await Promise.resolve();
+    expect(calls.map((item) => item[0])).toEqual(["save", "poll"]);
+    expect(calls[1][1]).toBe(existing.task.id);
 });
 
 test("history restores reference media URLs from local storage keys", async () => {
