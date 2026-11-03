@@ -226,6 +226,33 @@ test("unmeasured reference duration fails before any upstream task request", asy
     }
 });
 
+test("completed-task download network errors never claim the upload failed", async () => {
+    const originalGet = axios.get;
+    const originalPost = axios.post;
+    const calls: string[] = [];
+    let submissions = 0;
+    axios.post = (async () => { submissions++; throw new Error("must not create a new task"); }) as typeof axios.post;
+    axios.get = (async (url: string) => {
+        calls.push(url);
+        if (url.endsWith("/content")) throw new axios.AxiosError("Network Error", "ERR_NETWORK");
+        return { data: { id: "existing-task", status: "completed" } };
+    }) as typeof axios.get;
+    try {
+        const i18n = (await import("../src/i18n")).default;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            let failure: unknown;
+            try {
+                await videoModule.pollVideoGenerationTask(config(), { id: "existing-task", provider: "openai", model: "brand-new-video" });
+            } catch (error) { failure = error; }
+            expect(videoModule.isVideoArtifactDownloadError(failure)).toBe(true);
+            expect((failure as Error).message).toBe(i18n.t("apiErrors.videoDownloadFailed"));
+            expect((failure as Error).message).not.toBe(i18n.t("apiErrors.uploadInterrupted"));
+        }
+        expect(submissions).toBe(0);
+        expect(calls.filter((url) => url.endsWith("/existing-task/content"))).toHaveLength(2);
+    } finally { axios.get = originalGet; axios.post = originalPost; }
+});
+
 test("Sora without an opt-in keeps its existing pixel-size request", async () => {
     const original = axios.post;
     const bodies: any[] = [];

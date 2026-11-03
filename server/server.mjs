@@ -231,11 +231,15 @@ async function aiProxy(req, url, res) {
             }
             res.writeHead(upstream.status, responseHeaders);
         }
-        if (upstream.body) await Readable.fromWeb(upstream.body).pipe(res);
+        // Heartbeats must stop before JSON bytes arrive, not while the body is being piped.
+        if (timer) clearInterval(timer);
+        if (upstream.body) await pipeline(Readable.fromWeb(upstream.body), res);
         else res.end();
     } catch (error) {
+        if (res.destroyed) return;
         if (!res.headersSent) json(res, 502, { error: { message: "模型服务暂时不可用" } });
-        else if (!res.writableEnded) res.end(JSON.stringify({ error: { message: "模型服务暂时不可用" } }));
+        else if (heartbeat && !res.writableEnded) res.end(JSON.stringify({ error: { message: "模型服务暂时不可用" } }));
+        else res.destroy();
     } finally {
         if (timer) clearInterval(timer);
     }
