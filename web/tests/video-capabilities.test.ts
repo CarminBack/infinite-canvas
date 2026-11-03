@@ -173,6 +173,40 @@ test("actual create path sends unified fields and keeps durations beyond legacy 
     }
 });
 
+test("SPFX submits synchronized AistarsLab durations and original resolution labels", async () => {
+    const original = axios.post;
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    axios.post = (async (url: string, body: Record<string, unknown>) => {
+        calls.push({ url, body });
+        return { data: { id: "synced-job" } };
+    }) as typeof axios.post;
+    try {
+        for (const item of [
+            ...[5, 10, 15, 30].map((seconds) => ({ model: "seedance-720p-seedance-2.5-c50", label: "720p", pixels: "720", seconds, steps: [5, 10, 15, 30] })),
+            { model: "aistarslab-minimax-h3-2k-c59", label: "2K", pixels: "1440", seconds: 15, steps: undefined },
+            { model: "aistarslab-minimax-h3-4k-c59", label: "4K", pixels: "2160", seconds: 15, steps: undefined },
+        ]) {
+            const cfg = config(item.model, {
+                requestFormat: "unified_video_v1", resolutions: [item.label], ratios: ["16:9", "9:16"],
+                minSeconds: 5, maxSeconds: 30, secondsSteps: item.steps,
+                modes: ["text2video", "image2video"], frames: false, maxImages: 9, maxVideos: 0, maxAudios: 0,
+            });
+            cfg.vquality = item.pixels;
+            cfg.videoSeconds = String(item.seconds);
+            cfg.size = "16:9";
+            const caps = capsModule.tokenVideoModelCaps(cfg, cfg.videoModel)!;
+            expect(capsModule.capsResolutionValue(caps, item.pixels)).toBe(item.pixels);
+            expect(capsModule.capsResolutionName(caps, item.pixels)).toBe(item.label);
+            await videoModule.createVideoGenerationTask(cfg, "animate", []);
+            expect(calls.at(-1)?.url).toBe("/image/api/ai/video/v1/videos");
+            expect(calls.at(-1)?.body.seconds).toBe(item.seconds);
+            expect(calls.at(-1)?.body.resolution).toBe(item.label);
+        }
+    } finally {
+        axios.post = original;
+    }
+});
+
 test("unmeasured reference duration fails before any upstream task request", async () => {
     const original = axios.post;
     let calls = 0;

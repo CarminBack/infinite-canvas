@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Music, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Select, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -111,7 +111,6 @@ export default function VideoPage() {
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
-    const generationCount = Math.max(1, Math.min(10, Math.floor(Number(config.videoCount) || 1)));
     const running = results.some((item) => item.status === "pending");
     const elapsedMs = running && previewLog ? Math.max(0, (clock || Date.now()) - previewLog.createdAt) : 0;
     // Reference limits follow the selected model; models without known limits keep the original 7-image default.
@@ -213,32 +212,29 @@ export default function VideoPage() {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.invalidParams") });
             return;
         }
-        queueGeneration(snapshot, generationCount, agentTaskId);
+        queueGeneration(snapshot, agentTaskId);
     };
 
-    const queueGeneration = (snapshot: VideoRequestSnapshot, count: number, agentTaskId?: string) => {
-        const jobs = Array.from({ length: count }, () => ({
+    const queueGeneration = (snapshot: VideoRequestSnapshot, agentTaskId?: string) => {
+        const log = {
             ...buildLog({ prompt: snapshot.text, model: snapshot.config.videoModel, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending" }),
             videoRefs: snapshot.videos,
             audioRefs: snapshot.audios,
-        }));
-        for (const log of jobs) liveJobIdsRef.current.add(log.id);
+        };
+        liveJobIdsRef.current.add(log.id);
         visibleLogIdsRef.current = new Set([
             ...Array.from(visibleLogIdsRef.current).filter((id) => liveJobIdsRef.current.has(id)),
-            ...jobs.map((log) => log.id),
+            log.id,
         ]);
-        setPreviewLog(jobs[0]);
-        const nextResults = jobs.map((log) => ({ id: log.id, status: "pending" as const }));
-        setResults((items) => [...items, ...nextResults]);
+        setPreviewLog(log);
+        setResults((items) => [...items, { id: log.id, status: "pending" }]);
         setClock(Date.now());
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
-        message.success(t("videoWorkbench.queued", { count }));
-        void Promise.allSettled(jobs.map((log) => runQueuedGeneration(log, snapshot))).then((settled) => {
-            const successCount = settled.filter((item) => item.status === "fulfilled" && item.value).length;
-            const failCount = count - successCount;
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount, error: successCount ? undefined : t("workbench.generationFailed") });
-            if (successCount === count) message.success(t("videoWorkbench.generatedCount", { count }));
-            else message.error(t("videoWorkbench.partialGenerated", { success: successCount, failed: failCount }));
+        message.success(t("videoWorkbench.queued", { count: 1 }));
+        void runQueuedGeneration(log, snapshot).catch(() => false).then((success) => {
+            if (agentTaskId) updateAgentTask(agentTaskId, { status: success ? "succeeded" : "failed", successCount: success ? 1 : 0, failCount: success ? 0 : 1, error: success ? undefined : t("workbench.generationFailed") });
+            if (success) message.success(t("videoWorkbench.generatedCount", { count: 1 }));
+            else message.error(t("workbench.generationFailed"));
         });
     };
 
@@ -297,7 +293,7 @@ export default function VideoPage() {
         if (!log) return;
         const snapshot = { text: log.prompt, config: buildVideoConfig({ ...effectiveConfig, ...log.config }, log.model), references: [...log.references], videos: [...(log.videoRefs || [])], audios: [...(log.audioRefs || [])] };
         if (!log.task) {
-            queueGeneration(snapshot, 1);
+            queueGeneration(snapshot);
             return;
         }
         const retrying: GenerationLog = { ...log, status: "pending", error: undefined };
@@ -650,19 +646,9 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
 
     return (
         <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
+            <label className="col-span-2 block min-w-0">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("workbench.model")}</span>
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
-            </label>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">{t("videoWorkbench.count")}</span>
-                <Select
-                    className="w-full"
-                    aria-label={t("videoWorkbench.count")}
-                    value={Math.max(1, Math.min(10, Math.floor(Number(config.videoCount) || 1)))}
-                    options={Array.from({ length: 10 }, (_, index) => ({ value: index + 1, label: t("videoWorkbench.videos", { count: index + 1 }) }))}
-                    onChange={(value) => updateConfig("videoCount", String(value))}
-                />
             </label>
             <div className="col-span-2">
                 <VideoSettingsPanel config={config} model={model} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />

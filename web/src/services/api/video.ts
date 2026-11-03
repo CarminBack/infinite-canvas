@@ -10,7 +10,7 @@ import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } fro
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
-import { capsResolutionValue, inferCapsRatio, clampCapsSeconds, tokenVideoModelCaps, type VideoModelCaps } from "@/lib/video-model-caps";
+import { capsResolutionName, inferCapsRatio, clampCapsSeconds, tokenVideoModelCaps, type VideoModelCaps } from "@/lib/video-model-caps";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { buildUnifiedVideoRequest } from "@/lib/unified-video-request";
@@ -235,7 +235,7 @@ async function createTokenVideoTask(config: AiConfig, model: string, prompt: str
     const seconds = String(caps ? clampCapsSeconds(caps, requestedSeconds) : requestedSeconds);
     const requestedRatio = videoAspectRatio(config.size);
     const ratio = caps ? inferCapsRatio(caps, config.size || requestedRatio) : requestedRatio;
-    const resolution = caps ? normalizeVideoResolution(capsResolutionValue(caps, config.vquality)) : normalizeVideoResolution(config.vquality);
+    const resolution = (caps && capsResolutionName(caps, config.vquality)) || normalizeVideoResolution(config.vquality);
     const generateAudio = boolConfig(config.videoGenerateAudio, true);
     const watermark = boolConfig(config.videoWatermark, false);
     // Sora-protocol plugins pass the JSON body through unchanged: send only fields the upstream accepts, with the

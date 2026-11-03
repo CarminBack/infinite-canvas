@@ -81,7 +81,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, model, showT
                 <SettingGroup title={t("settingsPanels.video.quality")} color={theme.node.muted}>
                     {declaredResolutions.length ? (
                         <div className="grid grid-cols-4 gap-2.5">
-                            {declaredResolutions.map((label) => { const value = label === "4K" ? "2160" : label.replace(/p$/i, ""); return <OptionPill key={label} selected={resolution === value} theme={theme} onClick={() => selectResolution(value)}>{label}</OptionPill>; })}
+                            {declaredResolutions.map((label) => { const value = capsResolutionValue({ resolutions: [label] }); return <OptionPill key={label} selected={resolution === value} theme={theme} onClick={() => selectResolution(value)}>{label}</OptionPill>; })}
                         </div>
                     ) : (
                         <div className="grid grid-cols-4 gap-2.5">

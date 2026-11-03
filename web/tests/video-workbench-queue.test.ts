@@ -53,49 +53,48 @@ async function createHarness() {
     const source = `${queueSource}\n${updateSource}\n${pollSource}\nreturn { queueGeneration, pollGenerationLog };`;
     const make = new AsyncFunction(...Object.keys(env), transpiler.transformSync(source));
     const functions = await make(...Object.values(env));
-    return { ...env, ...functions } as typeof env & { queueGeneration: (snapshot: any, count: number, agentTaskId?: string) => void; pollGenerationLog: (...args: any[]) => Promise<boolean> };
+    return { ...env, ...functions } as typeof env & { queueGeneration: (snapshot: any, agentTaskId?: string) => void; pollGenerationLog: (...args: any[]) => Promise<boolean> };
 }
 
-test("video batch creates independent tasks and keeps concurrent submissions visible", async () => {
+test("each submission creates one independent task while earlier tasks remain pending", async () => {
     const h = await createHarness();
     const refsA = [{ id: "ref-a" }];
     const refsB = [{ id: "ref-b" }];
     const snapshot = (text: string, references: unknown[]) => ({ text, config: { videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references, videos: [], audios: [] });
-    h.queueGeneration(snapshot("first prompt", refsA), 3, "agent-batch");
-    h.queueGeneration(snapshot("second prompt", refsB), 2);
+    h.queueGeneration(snapshot("first prompt", refsA), "agent-first");
+    h.queueGeneration(snapshot("second prompt", refsB));
+    h.queueGeneration(snapshot("third prompt", []));
 
-    for (let attempt = 0; attempt < 20 && h.polls.size !== 5; attempt++) await Promise.resolve();
-    expect(h.created).toHaveLength(5);
-    expect(h.created.filter((item) => item.prompt === "first prompt")).toHaveLength(3);
-    expect(h.created.filter((item) => item.prompt === "second prompt")).toHaveLength(2);
-    expect(h.created.slice(0, 3).every((item) => item.references === refsA)).toBe(true);
-    expect(h.created.slice(3).every((item) => item.references === refsB)).toBe(true);
-    expect(h.getResults()).toHaveLength(5);
+    for (let attempt = 0; attempt < 20 && h.polls.size !== 3; attempt++) await Promise.resolve();
+    expect(h.created).toHaveLength(3);
+    expect(h.created.map((item) => item.prompt)).toEqual(["first prompt", "second prompt", "third prompt"]);
+    expect(h.created[0].references).toBe(refsA);
+    expect(h.created[1].references).toBe(refsB);
+    expect(h.getResults()).toHaveLength(3);
 
     h.polls.get("task-3")!({ status: "completed", result: { url: "video-3" } });
     h.polls.get("task-2")!({ status: "failed", error: "mock failure" });
-    h.polls.get("task-5")!({ status: "completed", result: { url: "video-5" } });
     h.polls.get("task-1")!({ status: "completed", result: { url: "video-1" } });
-    h.polls.get("task-4")!({ status: "completed", result: { url: "video-4" } });
     for (let attempt = 0; attempt < 20 && h.liveJobIdsRef.current.size; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect([...h.saved.values()].filter((log: any) => log.status === "success")).toHaveLength(4);
+    expect([...h.saved.values()].filter((log: any) => log.status === "success")).toHaveLength(2);
     expect([...h.saved.values()].filter((log: any) => log.status === "failed")).toHaveLength(1);
     expect(h.liveJobIdsRef.current.size).toBe(0);
-    expect(h.getResults().filter((item: any) => item.status === "success")).toHaveLength(4);
+    expect(h.getResults().filter((item: any) => item.status === "success")).toHaveLength(2);
     expect(h.getResults().filter((item: any) => item.status === "failed")).toHaveLength(1);
     expect(h.successes).toContain("succeeded");
 });
 
-test("completed results remain visible when a later batch is submitted", async () => {
+test("completed results remain visible when another video is submitted", async () => {
     const h = await createHarness();
     const snapshot = (text: string) => ({ text, config: { videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references: [], videos: [], audios: [] });
-    h.queueGeneration(snapshot("first"), 2);
+    h.queueGeneration(snapshot("first"));
+    h.queueGeneration(snapshot("second"));
     for (let attempt = 0; attempt < 20 && h.polls.size !== 2; attempt++) await Promise.resolve();
     h.polls.get("task-1")!({ status: "completed", result: { url: "video-1" } });
     h.polls.get("task-2")!({ status: "completed", result: { url: "video-2" } });
     for (let attempt = 0; attempt < 20 && h.liveJobIdsRef.current.size; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
-    h.queueGeneration(snapshot("second"), 1);
+    h.queueGeneration(snapshot("third"));
     expect(h.getResults()).toHaveLength(3);
 });
 
@@ -154,12 +153,23 @@ test("history restores reference media URLs from local storage keys", async () =
     expect(stored.audioRefs[0].url).toBe("");
 });
 
- test("video selection defaults to one and safely clamps persisted counts", async () => {
-    if (!globalThis.localStorage) Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null, setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0 } });
-    const { useConfigStore } = await import("../src/stores/use-config-store");
-    expect(useConfigStore.getState().config.videoCount).toBe("1");
-    for (const [value, expected] of [["4", 4], ["99", 10], ["0", 1], ["invalid", 1]] as const) {
-        const count = Math.max(1, Math.min(10, Math.floor(Number(value) || 1)));
-        expect(count).toBe(expected);
-    }
+test("Generate queues one task per click even with a persisted old batch count", async () => {
+    const h = await createHarness();
+    const source = page.slice(page.indexOf("    const generate ="), page.indexOf("\n\n    const queueGeneration ="));
+    let prompt = "first prompt";
+    const env = {
+        agentTaskIdRef: { current: undefined }, updateAgentTask: h.updateAgentTask, t: h.t,
+        buildRequestSnapshot: () => ({ text: prompt, config: { videoCount: "10", videoModel: "seedance-test", model: "seedance-test", size: "9:16", vquality: "720", videoSeconds: "6" }, references: [], videos: [], audios: [] }),
+        queueGeneration: h.queueGeneration,
+    };
+    const make = new AsyncFunction(...Object.keys(env), `${transpiler.transformSync(source)}; return generate;`);
+    const generate = await make(...Object.values(env));
+    await generate();
+    prompt = "second prompt";
+    await generate();
+    for (let attempt = 0; attempt < 20 && h.polls.size !== 2; attempt++) await Promise.resolve();
+    expect(h.created.map((item) => item.prompt)).toEqual(["first prompt", "second prompt"]);
+    expect(h.getResults().map((item: any) => item.status)).toEqual(["pending", "pending"]);
+    h.polls.get("task-1")!({ status: "failed", error: "mock failure" });
+    h.polls.get("task-2")!({ status: "failed", error: "mock failure" });
 });

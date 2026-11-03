@@ -15,6 +15,8 @@ const BASE_PATH = (process.env.CANVAS_BASE_PATH || "").replace(/\/$/, "");
 if (BASE_PATH && !/^\/[a-zA-Z0-9/_-]+$/.test(BASE_PATH)) throw new Error("Invalid CANVAS_BASE_PATH");
 const FIXED_TOKENS = { image: process.env.CANVAS_IMAGE_API_KEY?.trim(), video: process.env.CANVAS_VIDEO_API_KEY?.trim() };
 const FIXED_KEYS = Boolean(FIXED_TOKENS.image || FIXED_TOKENS.video);
+let fixedVideoMetadata = [];
+let fixedVideoMetadataRequest;
 if (FIXED_KEYS && (!FIXED_TOKENS.image || !FIXED_TOKENS.video)) throw new Error("Both fixed image and video API keys are required");
 const TOKEN_ORIGIN = origin(process.env.TOKEN_API_BASE_URL || process.env.TOKEN_ISSUER_URL || "https://token.mewinyou.shop");
 const IMAGE_ORIGIN = origin(process.env.IMAGE_API_BASE_URL || "https://image-api.mewinyou.shop");
@@ -156,7 +158,7 @@ async function modelCatalog(req, res) {
     if (!session) return;
     try {
         const [image, video, text, audio, videoDetails, imagePrice] = await Promise.all([
-            fetchModels(session.tokens.image, IMAGE_ORIGIN), fetchModels(session.tokens.video, VIDEO_ORIGIN), session.tokens.text ? fetchModels(session.tokens.text).catch(() => []) : [], session.tokens.audio ? fetchModels(session.tokens.audio).catch(() => []) : [], fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), session.tokens.video).then((value) => value.data || []).catch(() => []), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
+            fetchModels(session.tokens.image, IMAGE_ORIGIN), fetchModels(session.tokens.video, VIDEO_ORIGIN), session.tokens.text ? fetchModels(session.tokens.text).catch(() => []) : [], session.tokens.audio ? fetchModels(session.tokens.audio).catch(() => []) : [], fetchVideoMetadata(session.tokens.video), fetchJson(new URL("/v1/image-group-pricing", TOKEN_ORIGIN), session.tokens.image).then((value) => value.data).catch(() => null),
         ]);
         const videoMetadata = new Map(videoDetails.map((item) => [item.id, item]));
         const defaults = { image: "gpt-image-2", video: "seedance-720p-fast-c47", text: "gpt-5.6-sol", audio: "gpt-4o-audio-preview" };
@@ -353,6 +355,20 @@ function normalizeReturnTo(value) { if (!value?.startsWith("/") || value.startsW
 function redirect(res, location, setCookie) { if (BASE_PATH && location.startsWith("/") && !location.startsWith("//") && location !== BASE_PATH && !location.startsWith(`${BASE_PATH}/`)) location = BASE_PATH + location; if (setCookie) res.setHeader("Set-Cookie", setCookie); res.writeHead(302, { Location: location, "Cache-Control": "no-store" }); res.end(); }
 function json(res, status, value) { const body = JSON.stringify(value); res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(body), "Cache-Control": "no-store" }); res.end(body); }
 async function fetchJson(url, token) { const response = await fetch(url, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: "application/json" }, signal: AbortSignal.timeout(15000) }); const body = await response.json(); if (!response.ok) throw new Error(body.error?.message || body.message || `request failed (${response.status})`); return body; }
+async function fetchVideoMetadata(token) {
+    const read = () => fetchJson(new URL("/api/usage/token/video-models", TOKEN_ORIGIN), token).then((value) => {
+        if (!Array.isArray(value.data)) throw new Error("Invalid video metadata");
+        return value.data;
+    });
+    if (!FIXED_KEYS) return read().catch(() => []);
+    if (!fixedVideoMetadataRequest) {
+        fixedVideoMetadataRequest = read().then((items) => {
+            fixedVideoMetadata = items;
+            return items;
+        }).catch(() => fixedVideoMetadata).finally(() => { fixedVideoMetadataRequest = undefined; });
+    }
+    return fixedVideoMetadataRequest;
+}
 async function fetchModels(token, apiOrigin = TOKEN_ORIGIN) { const payload = await fetchJson(new URL("/v1/models", apiOrigin), token); return [...new Set((payload.data || []).map((item) => item.id?.trim()).filter(Boolean))]; }
 function prioritize(models, preferred) { return [...new Set(models)].sort((a, b) => a === preferred ? -1 : b === preferred ? 1 : a.localeCompare(b)); }
 function videoMeta(item) { return item ? { priceLabel: item.price_label?.trim() || undefined, description: item.description?.trim() || undefined, capabilities: item.capabilities && typeof item.capabilities === "object" && !Array.isArray(item.capabilities) ? item.capabilities : undefined, limitations: Array.isArray(item.limitations) ? item.limitations.filter((value) => typeof value === "string" && value.trim()) : undefined } : { priceLabel: "价格以 Token 页面为准" }; }

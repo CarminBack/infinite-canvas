@@ -13,13 +13,18 @@ test("fixed-key subpath gateway keeps credentials server-side and isolates uploa
     const root = await mkdtemp(join(tmpdir(), "canvas-spfx-test-"));
     const calls = [];
     const capabilities = { requestFormat: "unified_video_v1", resolutions: ["768p"], ratios: ["8:5"], minSeconds: 2, maxSeconds: 120, frames: false, maxVideos: 1, maxAudios: 0, referenceDurationRequired: true };
+    let metadataStatus = 200;
+    let metadataCapabilities = capabilities;
     const upstream = http.createServer(async (req, res) => {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
         calls.push({ path: req.url, token: req.headers.authorization, body: Buffer.concat(chunks).toString() });
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/models") return res.end(JSON.stringify({ data: [{ id: req.headers.authorization === "Bearer test-image-key" ? "test-image" : "test-video" }] }));
-        if (req.url === "/api/usage/token/video-models") return res.end(JSON.stringify({ data: [{ id: "test-video", price_label: "$0.25/秒", description: "Test video", capabilities }] }));
+        if (req.url === "/api/usage/token/video-models") {
+            res.statusCode = metadataStatus;
+            return res.end(JSON.stringify(metadataStatus === 200 ? { data: [{ id: "test-video", price_label: "$0.25/秒", description: "Test video", capabilities: metadataCapabilities }] } : { message: "rate limited" }));
+        }
         if (req.url === "/v1/image-group-pricing") return res.end(JSON.stringify({ data: { "1k": 0.1, "2k": 0.2, "4k": 0.4 } }));
         if (req.url === "/v1/videos") return res.end(JSON.stringify({ id: "mock-task", status: "queued" }));
         return res.end(JSON.stringify({ data: [] }));
@@ -52,6 +57,14 @@ test("fixed-key subpath gateway keeps credentials server-side and isolates uploa
     assert.deepEqual(catalog.video[0].capabilities, capabilities);
     assert.equal(catalog.video[0].capabilities.maxAudios, 0);
     assert.equal(catalog.video[0].capabilities.frames, false);
+    metadataStatus = 429;
+    const limited = await (await request("/image/api/model-catalog")).json();
+    assert.deepEqual(limited.video[0].capabilities, capabilities);
+    assert.equal(limited.video[0].priceLabel, "$0.25/秒");
+    metadataStatus = 200;
+    metadataCapabilities = { ...capabilities, secondsSteps: [5, 10, 15, 30] };
+    const recovered = await (await request("/image/api/model-catalog")).json();
+    assert.deepEqual(recovered.video[0].capabilities.secondsSteps, [5, 10, 15, 30]);
     assert.equal(catalogResponse.headers.get("cache-control"), "no-store");
     assert.ok(!JSON.stringify(catalog).includes("test-image-key") && !JSON.stringify(catalog).includes("test-video-key"));
     assert.deepEqual(catalog.text, []);
