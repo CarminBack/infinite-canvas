@@ -10,6 +10,7 @@ export type VideoCapabilities = {
     ratios?: readonly string[];
     minSeconds?: number;
     maxSeconds?: number;
+    modes?: readonly ("text2video" | "image2video" | "frames2video" | "first-frame-to-video")[];
     secondsSteps?: readonly number[];
     frames?: boolean;
     maxImages?: number;
@@ -62,11 +63,19 @@ export function tokenVideoModelCaps(config: AiConfig, model: string) {
     return videoModelCaps(model);
 }
 
-/** Resolution value stored in the panel config (numeric pixels), derived from the fixed model resolution. */
+const RESOLUTION_PIXELS: Record<string, string> = { "2K": "1440", "4K": "2160" };
+
+/** Resolution value stored in the panel config (numeric pixels). */
 export function capsResolutionValue(caps: VideoModelCaps, current = "720") {
     const options = caps.resolutions || (caps.resolution ? [caps.resolution] : []);
-    const value = options.find((item) => (item === "4K" ? "2160" : item.replace(/p$/i, "")) === current) || options[0];
-    return value ? (value === "4K" ? "2160" : value.replace(/p$/i, "")) : current;
+    const value = options.find((item) => (RESOLUTION_PIXELS[item] || item.replace(/p$/i, "")) === current) || options[0];
+    return value ? RESOLUTION_PIXELS[value] || value.replace(/p$/i, "") : current;
+}
+
+export function capsResolutionName(caps: VideoModelCaps, current = "720") {
+    const selected = capsResolutionValue(caps, current);
+    const options = caps.resolutions || (caps.resolution ? [caps.resolution] : []);
+    return options.find((label) => capsResolutionValue({ resolutions: [label] }) === selected);
 }
 
 export function inferCapsRatio(caps: VideoModelCaps, size: string) {
